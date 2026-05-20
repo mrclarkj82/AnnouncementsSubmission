@@ -1,0 +1,166 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function currentUser() {
+      return get(userPath(request.auth.uid));
+    }
+
+    function role() {
+      return signedIn() && exists(userPath(request.auth.uid))
+        ? currentUser().data.role
+        : "Teacher";
+    }
+
+    function isAdmin() {
+      return role() == "Admin/Adviser";
+    }
+
+    function isStudio() {
+      return role() == "Studio Team";
+    }
+
+    function isStaff() {
+      return isAdmin() || isStudio();
+    }
+
+    function validRole(value) {
+      return value in ["Teacher", "Studio Team", "Admin/Adviser"];
+    }
+
+    function validAnnouncementStatus(value) {
+      return value in [
+        "Submitted",
+        "Approved",
+        "Needs Revision",
+        "Ready for Broadcast",
+        "Aired",
+        "Skipped",
+        "Archived",
+        "Rejected"
+      ];
+    }
+
+    function validRundownStatus(value) {
+      return value in ["Draft", "Finalized", "Archived"];
+    }
+
+    function announcementOwner() {
+      return signedIn() && resource.data.submittedByUserId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "displayName",
+          "email",
+          "photoURL",
+          "role",
+          "createdAt",
+          "lastLoginAt",
+          "updatedAt"
+        ])
+        && request.resource.data.uid == userId
+        && request.resource.data.role == "Teacher";
+      allow update: if isAdmin()
+        && validRole(request.resource.data.role);
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "displayName",
+          "email",
+          "photoURL",
+          "lastLoginAt",
+          "updatedAt"
+        ]);
+      allow delete: if isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow get, list: if isStaff()
+        || (signedIn() && resource.data.submittedByUserId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          "announcementId",
+          "title",
+          "text",
+          "driveVideoLink",
+          "requestedAirDate",
+          "expirationDate",
+          "category",
+          "priority",
+          "submittedByUserId",
+          "submittedByName",
+          "contactName",
+          "studioNotes",
+          "notesForStudio",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.announcementId == announcementId
+        && request.resource.data.submittedByUserId == request.auth.uid
+        && request.resource.data.status == "Submitted";
+      allow update: if isStaff()
+        && validAnnouncementStatus(request.resource.data.status);
+      allow update: if announcementOwner()
+        && resource.data.status in ["Submitted", "Needs Revision"]
+        && request.resource.data.submittedByUserId == resource.data.submittedByUserId
+        && request.resource.data.status == "Submitted"
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "title",
+          "text",
+          "driveVideoLink",
+          "requestedAirDate",
+          "expirationDate",
+          "category",
+          "priority",
+          "contactName",
+          "notesForStudio",
+          "status",
+          "updatedAt"
+        ]);
+      allow delete: if isAdmin();
+    }
+
+    match /rundowns/{rundownId} {
+      allow get, list: if isStaff();
+      allow create: if isAdmin()
+        && request.resource.data.rundownId == rundownId
+        && validRundownStatus(request.resource.data.status);
+      allow create: if isStudio()
+        && request.resource.data.rundownId == rundownId
+        && request.resource.data.locked == false
+        && validRundownStatus(request.resource.data.status);
+      allow update: if isAdmin()
+        && validRundownStatus(request.resource.data.status);
+      allow update: if isStudio()
+        && resource.data.locked == false
+        && request.resource.data.locked == resource.data.locked
+        && validRundownStatus(request.resource.data.status);
+      allow delete: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /broadcastHistory/{historyId} {
+      allow get, list: if isStaff();
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}

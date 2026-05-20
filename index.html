@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="School news broadcast announcement management for teachers, studio teams, and advisers."
+    />
+    <title>Broadcast Desk</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: "#080a12",
+              panel: "#101522",
+              panel2: "#151b2b",
+              line: "#273042",
+              mint: "#2dd4bf",
+              pulse: "#f43f5e",
+              volt: "#facc15",
+              electric: "#38bdf8",
+            },
+            boxShadow: {
+              glow:
+                "0 0 0 1px rgba(45, 212, 191, 0.16), 0 22px 70px rgba(8, 10, 18, 0.55)",
+            },
+          },
+        },
+      };
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "htm/react": "https://esm.sh/htm@3.1.1/react?deps=react@18.3.1",
+          "lucide-react": "https://esm.sh/lucide-react@0.468.0?deps=react@18.3.1",
+          "firebase/app": "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js",
+          "firebase/auth": "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js",
+          "firebase/firestore": "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
