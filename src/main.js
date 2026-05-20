@@ -139,16 +139,21 @@ function timestampLabel(value) {
   });
 }
 
+function isBootstrapAdminEmail(email) {
+  return BOOTSTRAP_ADMIN_EMAILS.has(safeText(email).toLowerCase());
+}
+
+function effectiveRole(profile) {
+  return isBootstrapAdminEmail(profile?.email) ? "Admin/Adviser" : profile?.role;
+}
+
 function hasStaffAccess(profile) {
-  return profile?.role === "Studio Team" || profile?.role === "Admin/Adviser";
+  const role = effectiveRole(profile);
+  return role === "Studio Team" || role === "Admin/Adviser";
 }
 
 function hasAdminAccess(profile) {
-  return profile?.role === "Admin/Adviser";
-}
-
-function isBootstrapAdminEmail(email) {
-  return BOOTSTRAP_ADMIN_EMAILS.has(safeText(email).toLowerCase());
+  return effectiveRole(profile) === "Admin/Adviser";
 }
 
 function sortByUpdated(a, b) {
@@ -621,6 +626,7 @@ function Metric({ value, label, icon: Icon }) {
 }
 
 function AppShell({ profile, taxonomy, children, view, setView }) {
+  const role = effectiveRole(profile);
   const nav = [
     { id: "submit", label: "Submit", icon: Send, show: true },
     { id: "mine", label: "My Status", icon: ListChecks, show: true },
@@ -645,7 +651,8 @@ function AppShell({ profile, taxonomy, children, view, setView }) {
               <p className="truncate text-sm font-black uppercase tracking-[0.22em] text-white">
                 Broadcast Desk
               </p>
-              <p className="truncate text-xs text-slate-500">${profile?.displayName} - ${profile?.role}</p>
+              <p className="truncate text-xs text-slate-500">${profile?.displayName} - ${role}</p>
+              <p className="hidden truncate text-[11px] text-slate-600 sm:block">${profile?.email}</p>
             </div>
           </div>
           <div className="hidden items-center gap-2 md:flex">
