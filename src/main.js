@@ -52,6 +52,10 @@ import {
 } from "./firebase.js";
 
 const ROLES = ["Teacher", "Studio Team", "Admin/Adviser"];
+const BOOTSTRAP_ADMIN_EMAILS = new Set([
+  "joseph.clark@doralacademynv.org",
+  "koby.walsh@doralacademynv.org",
+]);
 const ANNOUNCEMENT_STATUSES = [
   "Submitted",
   "Approved",
@@ -141,6 +145,10 @@ function hasStaffAccess(profile) {
 
 function hasAdminAccess(profile) {
   return profile?.role === "Admin/Adviser";
+}
+
+function isBootstrapAdminEmail(email) {
+  return BOOTSTRAP_ADMIN_EMAILS.has(safeText(email).toLowerCase());
 }
 
 function sortByUpdated(a, b) {
@@ -320,6 +328,8 @@ function useAuthProfile() {
       try {
         const profileRef = doc(db, "users", nextUser.uid);
         const profileSnap = await getDoc(profileRef);
+        const bootstrapAdmin = isBootstrapAdminEmail(nextUser.email);
+        const bootstrapRole = bootstrapAdmin ? "Admin/Adviser" : "Teacher";
         const sharedProfile = {
           uid: nextUser.uid,
           displayName: nextUser.displayName || nextUser.email || "Teacher",
@@ -330,19 +340,44 @@ function useAuthProfile() {
         };
 
         if (!profileSnap.exists()) {
-          await setDoc(profileRef, {
+          const newProfile = {
             ...sharedProfile,
-            role: "Teacher",
+            role: bootstrapRole,
             createdAt: serverTimestamp(),
-          });
+          };
+          try {
+            await setDoc(profileRef, newProfile);
+          } catch (createError) {
+            if (!bootstrapAdmin) throw createError;
+            await setDoc(profileRef, { ...newProfile, role: "Teacher" });
+          }
         } else {
-          await setDoc(profileRef, sharedProfile, { merge: true });
+          const existingRole = profileSnap.data().role;
+          const updateProfile =
+            bootstrapAdmin && existingRole !== "Admin/Adviser"
+              ? { ...sharedProfile, role: "Admin/Adviser" }
+              : sharedProfile;
+          try {
+            await setDoc(profileRef, updateProfile, { merge: true });
+          } catch (updateError) {
+            if (!bootstrapAdmin) throw updateError;
+            await setDoc(profileRef, sharedProfile, { merge: true });
+          }
         }
 
         unsubscribeProfile = onSnapshot(
           profileRef,
           (snapshot) => {
-            setProfile(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
+            const data = snapshot.exists() ? snapshot.data() : null;
+            setProfile(
+              data
+                ? {
+                    id: snapshot.id,
+                    ...data,
+                    role: bootstrapAdmin ? "Admin/Adviser" : data.role,
+                  }
+                : null,
+            );
             setLoading(false);
           },
           (snapshotError) => {

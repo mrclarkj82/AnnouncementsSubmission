@@ -14,10 +14,22 @@ service cloud.firestore {
       return get(userPath(request.auth.uid));
     }
 
+    function isBootstrapAdmin() {
+      return signedIn()
+        && request.auth.token.email in [
+          "joseph.clark@doralacademynv.org",
+          "koby.walsh@doralacademynv.org"
+        ];
+    }
+
     function role() {
-      return signedIn() && exists(userPath(request.auth.uid))
-        ? currentUser().data.role
-        : "Teacher";
+      return isBootstrapAdmin()
+        ? "Admin/Adviser"
+        : (
+          signedIn() && exists(userPath(request.auth.uid))
+            ? currentUser().data.role
+            : "Teacher"
+        );
     }
 
     function isAdmin() {
@@ -73,7 +85,10 @@ service cloud.firestore {
           "updatedAt"
         ])
         && request.resource.data.uid == userId
-        && request.resource.data.role == "Teacher";
+        && (
+          request.resource.data.role == "Teacher"
+          || (isBootstrapAdmin() && request.resource.data.role == "Admin/Adviser")
+        );
       allow update: if isAdmin()
         && validRole(request.resource.data.role);
       allow update: if signedIn()
