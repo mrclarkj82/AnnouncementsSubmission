@@ -139,6 +139,25 @@ function timestampLabel(value) {
   });
 }
 
+function announcementEndDate(announcement) {
+  return safeText(announcement.expirationDate) || safeText(announcement.requestedAirDate);
+}
+
+function announcementRunsOnDate(announcement, date) {
+  const start = safeText(announcement.requestedAirDate);
+  const end = announcementEndDate(announcement);
+  if (!start || !date) return false;
+  return date >= start && date <= end;
+}
+
+function dateRangeLabel(announcement) {
+  const start = safeText(announcement.requestedAirDate);
+  const end = announcementEndDate(announcement);
+  if (!start) return "No air date";
+  if (!end || end === start) return toDateLabel(start);
+  return `${toDateLabel(start)} to ${toDateLabel(end)}`;
+}
+
 function isBootstrapAdminEmail(email) {
   return BOOTSTRAP_ADMIN_EMAILS.has(safeText(email).toLowerCase());
 }
@@ -736,7 +755,7 @@ function SubmissionForm({ profile, taxonomy, editing, onCancel, onSaved, setToas
       return;
     }
     if (form.expirationDate && form.expirationDate < form.requestedAirDate) {
-      setError("Expiration date must be on or after the requested air date.");
+      setError("Last air date must be on or after the first air date.");
       return;
     }
     if (!isGoogleDriveLink(form.driveVideoLink)) {
@@ -828,14 +847,14 @@ function SubmissionForm({ profile, taxonomy, editing, onCancel, onSaved, setToas
           />
         </${Field}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <${Field} label="Requested air date">
+          <${Field} label="First air date">
             <${TextInput}
               type="date"
               value=${form.requestedAirDate}
               onInput=${(event) => update("requestedAirDate", event.currentTarget.value)}
             />
           </${Field}>
-          <${Field} label="Expiration date">
+          <${Field} label="Last air date">
             <${TextInput}
               type="date"
               value=${form.expirationDate}
@@ -930,7 +949,7 @@ function TeacherStatus({ profile, taxonomy, setToast }) {
                         <div>
                           <h3 className="text-lg font-black text-white">${announcement.title}</h3>
                           <p className="mt-1 text-sm text-slate-400">
-                            ${toDateLabel(announcement.requestedAirDate)} - ${announcement.category}
+                            ${dateRangeLabel(announcement)} - ${announcement.category}
                           </p>
                         </div>
                         <${StatusBadge} status=${announcement.status} />
@@ -944,7 +963,7 @@ function TeacherStatus({ profile, taxonomy, setToast }) {
                           `
                         : null}
                       <div className="mt-4 flex flex-wrap gap-2">
-                        <${IconBadge} icon=${CalendarDays}>Expires ${toDateLabel(announcement.expirationDate)}</${IconBadge}>
+                        <${IconBadge} icon=${CalendarDays}>Runs ${dateRangeLabel(announcement)}</${IconBadge}>
                         <${IconBadge} icon=${Sparkles}>${announcement.priority}</${IconBadge}>
                       </div>
                       ${["Submitted", "Needs Revision"].includes(announcement.status)
@@ -991,7 +1010,7 @@ function StudioDashboard({ profile, setToast }) {
 
   const filtered = activeAnnouncements.filter((item) => {
     return (
-      (!filters.date || item.requestedAirDate === filters.date) &&
+      (!filters.date || announcementRunsOnDate(item, filters.date)) &&
       (!filters.category || item.category === filters.category) &&
       (!filters.priority || item.priority === filters.priority) &&
       (!filters.teacher || item.submittedByName === filters.teacher) &&
@@ -1106,7 +1125,7 @@ function StudioDashboard({ profile, setToast }) {
                               <${IconBadge}>${announcement.priority}</${IconBadge}>
                             </div>
                           </td>
-                          <td className="px-4 py-4 text-slate-300">${toDateLabel(announcement.requestedAirDate)}</td>
+                          <td className="px-4 py-4 text-slate-300">${dateRangeLabel(announcement)}</td>
                           <td className="px-4 py-4 text-slate-300">${announcement.submittedByName}</td>
                           <td className="px-4 py-4"><${StatusBadge} status=${announcement.status} /></td>
                           <td className="w-72 px-4 py-4">
@@ -1146,7 +1165,7 @@ function AnnouncementCard({ announcement, updateStatus, setToast }) {
         <div>
           <h3 className="text-lg font-black text-white">${announcement.title}</h3>
           <p className="mt-1 text-sm text-slate-400">
-            ${toDateLabel(announcement.requestedAirDate)} - ${announcement.submittedByName}
+            ${dateRangeLabel(announcement)} - ${announcement.submittedByName}
           </p>
         </div>
         <${StatusBadge} status=${announcement.status} />
@@ -1239,7 +1258,7 @@ function RundownBuilder({ profile, setToast }) {
   const approvedForDate = announcements.filter(
     (item) =>
       !item.deletedAt &&
-      item.requestedAirDate === date &&
+      announcementRunsOnDate(item, date) &&
       ["Approved", "Ready for Broadcast"].includes(item.status),
   );
   const missingApproved = approvedForDate.filter(
