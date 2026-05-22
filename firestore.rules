@@ -6,46 +6,83 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function userPath(uid) {
-      return /databases/$(database)/documents/users/$(uid);
+    function hasEmail() {
+      return signedIn() && request.auth.token.email is string;
     }
 
-    function currentUser() {
-      return get(userPath(request.auth.uid));
+    function signedInEmail() {
+      return request.auth.token.email.lower();
     }
 
-    function isBootstrapAdmin() {
-      return signedIn()
-        && request.auth.token.email in [
-          "joseph.clark@doralacademynv.org",
-          "koby.walsh@doralacademynv.org"
-        ];
+    function validDoralEmail(value) {
+      return value is string
+        && value == value.lower()
+        && (
+          value.matches('^[^@]+@doralacademynv\\.org$')
+          || value.matches('^[^@]+@student\\.doralacademynv\\.org$')
+        );
+    }
+
+    function isTeacherEmail() {
+      return hasEmail() && signedInEmail().matches('^[^@]+@doralacademynv\\.org$');
+    }
+
+    function isStudentEmail() {
+      return hasEmail() && signedInEmail().matches('^[^@]+@student\\.doralacademynv\\.org$');
+    }
+
+    function isAllowedDoralEmail() {
+      return isTeacherEmail() || isStudentEmail();
+    }
+
+    function authorizedUserPath(userEmail) {
+      return /databases/$(database)/documents/authorizedUsers/$(userEmail);
+    }
+
+    function hasAssignedRole(roleValue) {
+      return isAllowedDoralEmail()
+        && exists(authorizedUserPath(signedInEmail()))
+        && get(authorizedUserPath(signedInEmail())).data.email == signedInEmail()
+        && get(authorizedUserPath(signedInEmail())).data.active == true
+        && get(authorizedUserPath(signedInEmail())).data.role == roleValue;
     }
 
     function role() {
-      return isBootstrapAdmin()
-        ? "Admin/Adviser"
+      return hasAssignedRole("admin")
+        ? "admin"
         : (
-          signedIn() && exists(userPath(request.auth.uid))
-            ? currentUser().data.role
-            : "Teacher"
+          hasAssignedRole("studioCrew")
+            ? "studioCrew"
+            : (isTeacherEmail() ? "teacher" : "accessDenied")
         );
     }
 
     function isAdmin() {
-      return role() == "Admin/Adviser";
+      return role() == "admin";
     }
 
-    function isStudio() {
-      return role() == "Studio Team";
+    function isStudioCrew() {
+      return role() == "studioCrew";
     }
 
     function isStaff() {
-      return isAdmin() || isStudio();
+      return isAdmin() || isStudioCrew();
     }
 
-    function validRole(value) {
-      return value in ["Teacher", "Studio Team", "Admin/Adviser"];
+    function hasAppAccess() {
+      return isStaff() || role() == "teacher";
+    }
+
+    function canSubmitAnnouncements() {
+      return isTeacherEmail();
+    }
+
+    function validAssignedRole(value) {
+      return value in ["admin", "studioCrew"];
+    }
+
+    function validAnnouncementRole(value) {
+      return value in ["admin", "studioCrew", "teacher"];
     }
 
     function validAnnouncementStatus(value) {
@@ -65,50 +102,78 @@ service cloud.firestore {
       return value in ["Draft", "Finalized", "Archived"];
     }
 
-    function announcementOwner() {
-      return signedIn() && resource.data.submittedByUserId == request.auth.uid;
-    }
-
-    match /users/{userId} {
-      allow get: if signedIn() && (request.auth.uid == userId || isAdmin());
-      allow list: if isAdmin();
-      allow create: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.keys().hasOnly([
-          "uid",
-          "displayName",
+    function validAuthorizedUser(userEmail) {
+      return request.resource.data.keys().hasOnly([
           "email",
-          "photoURL",
           "role",
+          "active",
           "createdAt",
-          "lastLoginAt",
+          "createdBy",
           "updatedAt"
         ])
-        && request.resource.data.uid == userId
-        && (
-          request.resource.data.role == "Teacher"
-          || (isBootstrapAdmin() && request.resource.data.role == "Admin/Adviser")
-        );
+        && request.resource.data.email == userEmail
+        && validDoralEmail(request.resource.data.email)
+        && validAssignedRole(request.resource.data.role)
+        && request.resource.data.active is bool
+        && request.resource.data.createdBy is string;
+    }
+
+    function ownsAnnouncement() {
+      return isTeacherEmail() && resource.data.submittedByEmail == signedInEmail();
+    }
+
+    match /authorizedUsers/{userEmail} {
+      allow get: if isAdmin()
+        || (isAllowedDoralEmail() && userEmail == signedInEmail());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && validAuthorizedUser(userEmail)
+        && request.resource.data.createdBy == signedInEmail();
       allow update: if isAdmin()
-        && validRole(request.resource.data.role);
-      allow update: if signedIn()
-        && request.auth.uid == userId
+        && validAuthorizedUser(userEmail)
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          "displayName",
-          "email",
-          "photoURL",
-          "lastLoginAt",
+          "role",
+          "active",
           "updatedAt"
         ]);
       allow delete: if isAdmin();
     }
 
+    match /teacherProfiles/{teacherEmail} {
+      allow get: if isAdmin()
+        || (isTeacherEmail() && teacherEmail == signedInEmail());
+      allow list: if isAdmin();
+      allow create: if isTeacherEmail()
+        && teacherEmail == signedInEmail()
+        && request.resource.data.keys().hasOnly([
+          "email",
+          "displayName",
+          "firstLoginAt",
+          "lastLoginAt"
+        ])
+        && request.resource.data.email == teacherEmail;
+      allow update: if isTeacherEmail()
+        && teacherEmail == signedInEmail()
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.firstLoginAt == resource.data.firstLoginAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "displayName",
+          "lastLoginAt"
+        ]);
+      allow delete: if isAdmin();
+    }
+
     match /announcements/{announcementId} {
-      allow get, list: if isStaff()
-        || (signedIn() && resource.data.submittedByUserId == request.auth.uid);
-      allow create: if signedIn()
+      allow get, list: if isStaff() || ownsAnnouncement();
+      allow create: if canSubmitAnnouncements()
         && request.resource.data.keys().hasOnly([
           "announcementId",
+          "submittedByEmail",
+          "submittedByName",
+          "submittedByRole",
           "title",
           "text",
           "driveVideoLink",
@@ -116,8 +181,6 @@ service cloud.firestore {
           "expirationDate",
           "category",
           "priority",
-          "submittedByUserId",
-          "submittedByName",
           "contactName",
           "studioNotes",
           "notesForStudio",
@@ -126,13 +189,28 @@ service cloud.firestore {
           "updatedAt"
         ])
         && request.resource.data.announcementId == announcementId
-        && request.resource.data.submittedByUserId == request.auth.uid
+        && request.resource.data.submittedByEmail == signedInEmail()
+        && request.resource.data.submittedByRole == role()
+        && validAnnouncementRole(request.resource.data.submittedByRole)
         && request.resource.data.status == "Submitted";
-      allow update: if isStaff()
-        && validAnnouncementStatus(request.resource.data.status);
-      allow update: if announcementOwner()
+      allow update: if isAdmin()
+        && validAnnouncementStatus(request.resource.data.status)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "status",
+          "studioNotes",
+          "deletedAt",
+          "updatedAt"
+        ]);
+      allow update: if isStudioCrew()
+        && validAnnouncementStatus(request.resource.data.status)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "status",
+          "studioNotes",
+          "updatedAt"
+        ]);
+      allow update: if ownsAnnouncement()
         && resource.data.status in ["Submitted", "Needs Revision"]
-        && request.resource.data.submittedByUserId == resource.data.submittedByUserId
+        && request.resource.data.submittedByEmail == resource.data.submittedByEmail
         && request.resource.data.status == "Submitted"
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           "title",
@@ -155,13 +233,13 @@ service cloud.firestore {
       allow create: if isAdmin()
         && request.resource.data.rundownId == rundownId
         && validRundownStatus(request.resource.data.status);
-      allow create: if isStudio()
+      allow create: if isStudioCrew()
         && request.resource.data.rundownId == rundownId
         && request.resource.data.locked == false
         && validRundownStatus(request.resource.data.status);
       allow update: if isAdmin()
         && validRundownStatus(request.resource.data.status);
-      allow update: if isStudio()
+      allow update: if isStudioCrew()
         && resource.data.locked == false
         && request.resource.data.locked == resource.data.locked
         && validRundownStatus(request.resource.data.status);
@@ -169,7 +247,7 @@ service cloud.firestore {
     }
 
     match /categories/{categoryId} {
-      allow get, list: if signedIn();
+      allow get, list: if hasAppAccess();
       allow create, update, delete: if isAdmin();
     }
 

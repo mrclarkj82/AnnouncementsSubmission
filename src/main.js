@@ -51,11 +51,21 @@ import {
   where,
 } from "./firebase.js";
 
-const ROLES = ["Teacher", "Studio Team", "Admin/Adviser"];
-const BOOTSTRAP_ADMIN_EMAILS = new Set([
-  "joseph.clark@doralacademynv.org",
-  "koby.walsh@doralacademynv.org",
-]);
+const ROLES = {
+  ADMIN: "admin",
+  STUDIO_CREW: "studioCrew",
+  TEACHER: "teacher",
+  ACCESS_DENIED: "accessDenied",
+};
+const ROLE_LABELS = {
+  [ROLES.ADMIN]: "Admin",
+  [ROLES.STUDIO_CREW]: "Studio Crew",
+  [ROLES.TEACHER]: "Teacher",
+  [ROLES.ACCESS_DENIED]: "Access Denied",
+};
+const ASSIGNED_ROLES = [ROLES.ADMIN, ROLES.STUDIO_CREW];
+const DORAL_STAFF_DOMAIN = "@doralacademynv.org";
+const DORAL_STUDENT_DOMAIN = "@student.doralacademynv.org";
 const ANNOUNCEMENT_STATUSES = [
   "Submitted",
   "Approved",
@@ -158,21 +168,44 @@ function dateRangeLabel(announcement) {
   return `${toDateLabel(start)} to ${toDateLabel(end)}`;
 }
 
-function isBootstrapAdminEmail(email) {
-  return BOOTSTRAP_ADMIN_EMAILS.has(safeText(email).toLowerCase());
+function normalizeEmail(email) {
+  return safeText(email).toLowerCase();
 }
 
-function effectiveRole(profile) {
-  return isBootstrapAdminEmail(profile?.email) ? "Admin/Adviser" : profile?.role;
+function isTeacherEmail(email) {
+  return normalizeEmail(email).endsWith(DORAL_STAFF_DOMAIN);
+}
+
+function isStudentEmail(email) {
+  return normalizeEmail(email).endsWith(DORAL_STUDENT_DOMAIN);
+}
+
+function isAllowedDoralEmail(email) {
+  return isTeacherEmail(email) || isStudentEmail(email);
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(email));
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || ROLE_LABELS[ROLES.ACCESS_DENIED];
+}
+
+function hasAppAccess(profile) {
+  return [ROLES.ADMIN, ROLES.STUDIO_CREW, ROLES.TEACHER].includes(profile?.role);
+}
+
+function canSubmitAnnouncements(profile) {
+  return hasAppAccess(profile) && isTeacherEmail(profile?.email);
 }
 
 function hasStaffAccess(profile) {
-  const role = effectiveRole(profile);
-  return role === "Studio Team" || role === "Admin/Adviser";
+  return profile?.role === ROLES.STUDIO_CREW || profile?.role === ROLES.ADMIN;
 }
 
 function hasAdminAccess(profile) {
-  return effectiveRole(profile) === "Admin/Adviser";
+  return profile?.role === ROLES.ADMIN;
 }
 
 function sortByUpdated(a, b) {
@@ -329,6 +362,45 @@ function EmptyState({ icon: Icon = Sparkles, title, body }) {
   `;
 }
 
+async function resolveUserRole(signedInUser) {
+  const email = normalizeEmail(signedInUser?.email);
+  if (!isAllowedDoralEmail(email)) return { email, role: ROLES.ACCESS_DENIED };
+
+  const authorization = await getDoc(doc(db, "authorizedUsers", email));
+  const assignedUser = authorization?.exists() ? authorization.data() : null;
+  const assignedRole =
+    assignedUser?.active === true &&
+    assignedUser.email === email &&
+    ASSIGNED_ROLES.includes(assignedUser.role) &&
+    isAllowedDoralEmail(email)
+      ? assignedUser.role
+      : "";
+
+  if (assignedRole) return { email, role: assignedRole };
+  if (isTeacherEmail(email)) return { email, role: ROLES.TEACHER };
+  return { email, role: ROLES.ACCESS_DENIED };
+}
+
+async function syncTeacherProfile(signedInUser, email) {
+  const teacherRef = doc(db, "teacherProfiles", email);
+  const teacherSnapshot = await getDoc(teacherRef);
+  const teacherProfile = {
+    email,
+    displayName: signedInUser.displayName || email,
+    lastLoginAt: serverTimestamp(),
+  };
+
+  if (teacherSnapshot.exists()) {
+    await updateDoc(teacherRef, teacherProfile);
+    return;
+  }
+
+  await setDoc(teacherRef, {
+    ...teacherProfile,
+    firstLoginAt: serverTimestamp(),
+  });
+}
+
 function useAuthProfile() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -336,9 +408,7 @@ function useAuthProfile() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let unsubscribeProfile = () => {};
     const unsubscribeAuth = onAuthStateChanged(auth, async (nextUser) => {
-      unsubscribeProfile();
       setError("");
       if (!nextUser) {
         setUser(null);
@@ -350,73 +420,39 @@ function useAuthProfile() {
       setUser(nextUser);
       setLoading(true);
       try {
-        const profileRef = doc(db, "users", nextUser.uid);
-        const profileSnap = await getDoc(profileRef);
-        const bootstrapAdmin = isBootstrapAdminEmail(nextUser.email);
-        const bootstrapRole = bootstrapAdmin ? "Admin/Adviser" : "Teacher";
-        const sharedProfile = {
+        const resolvedRole = await resolveUserRole(nextUser);
+        const nextProfile = {
           uid: nextUser.uid,
           displayName: nextUser.displayName || nextUser.email || "Teacher",
-          email: nextUser.email || "",
+          email: resolvedRole.email,
           photoURL: nextUser.photoURL || "",
-          lastLoginAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          role: resolvedRole.role,
         };
 
-        if (!profileSnap.exists()) {
-          const newProfile = {
-            ...sharedProfile,
-            role: bootstrapRole,
-            createdAt: serverTimestamp(),
-          };
+        if (resolvedRole.role === ROLES.TEACHER) {
           try {
-            await setDoc(profileRef, newProfile);
-          } catch (createError) {
-            if (!bootstrapAdmin) throw createError;
-            await setDoc(profileRef, { ...newProfile, role: "Teacher" });
-          }
-        } else {
-          const existingRole = profileSnap.data().role;
-          const updateProfile =
-            bootstrapAdmin && existingRole !== "Admin/Adviser"
-              ? { ...sharedProfile, role: "Admin/Adviser" }
-              : sharedProfile;
-          try {
-            await setDoc(profileRef, updateProfile, { merge: true });
-          } catch (updateError) {
-            if (!bootstrapAdmin) throw updateError;
-            await setDoc(profileRef, sharedProfile, { merge: true });
+            await syncTeacherProfile(nextUser, resolvedRole.email);
+          } catch {
+            // Teacher profiles are optional and should not block verified teacher access.
           }
         }
 
-        unsubscribeProfile = onSnapshot(
-          profileRef,
-          (snapshot) => {
-            const data = snapshot.exists() ? snapshot.data() : null;
-            setProfile(
-              data
-                ? {
-                    id: snapshot.id,
-                    ...data,
-                    role: bootstrapAdmin ? "Admin/Adviser" : data.role,
-                  }
-                : null,
-            );
-            setLoading(false);
-          },
-          (snapshotError) => {
-            setError(snapshotError.message);
-            setLoading(false);
-          },
-        );
+        setProfile(nextProfile);
+        setLoading(false);
       } catch (authError) {
         setError(authError.message);
+        setProfile({
+          uid: nextUser.uid,
+          displayName: nextUser.displayName || nextUser.email || "Unknown user",
+          email: normalizeEmail(nextUser.email),
+          photoURL: nextUser.photoURL || "",
+          role: ROLES.ACCESS_DENIED,
+        });
         setLoading(false);
       }
     });
 
     return () => {
-      unsubscribeProfile();
       unsubscribeAuth();
     };
   }, []);
@@ -461,12 +497,17 @@ function useAnnouncements(profile) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!profile?.uid) return undefined;
+    if (!hasAppAccess(profile)) {
+      setAnnouncements([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
     setLoading(true);
     const announcementsRef = collection(db, "announcements");
     const request = hasStaffAccess(profile)
       ? announcementsRef
-      : query(announcementsRef, where("submittedByUserId", "==", profile.uid));
+      : query(announcementsRef, where("submittedByEmail", "==", profile.email));
     const unsubscribe = onSnapshot(
       request,
       (snapshot) => {
@@ -482,7 +523,7 @@ function useAnnouncements(profile) {
       },
     );
     return unsubscribe;
-  }, [profile?.uid, profile?.role]);
+  }, [profile?.email, profile?.role]);
 
   return { announcements, loading, error };
 }
@@ -513,27 +554,38 @@ function useRundown(date) {
   return { rundown, loading, error };
 }
 
-function useUsers(enabled) {
-  const [users, setUsers] = useState([]);
+function useAuthorizedUsers(enabled) {
+  const [authorizedUsers, setAuthorizedUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled) {
+      setAuthorizedUsers([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+    setLoading(true);
     const unsubscribe = onSnapshot(
-      collection(db, "users"),
+      collection(db, "authorizedUsers"),
       (snapshot) => {
-        setUsers(
+        setAuthorizedUsers(
           snapshot.docs
             .map((item) => ({ id: item.id, ...item.data() }))
-            .sort((a, b) => safeText(a.displayName).localeCompare(safeText(b.displayName))),
+            .sort((a, b) => safeText(a.email).localeCompare(safeText(b.email))),
         );
+        setLoading(false);
       },
-      (snapshotError) => setError(snapshotError.message),
+      (snapshotError) => {
+        setError(snapshotError.message);
+        setLoading(false);
+      },
     );
     return unsubscribe;
   }, [enabled]);
 
-  return { users, error };
+  return { authorizedUsers, loading, error };
 }
 
 function useRundowns(enabled) {
@@ -645,10 +697,10 @@ function Metric({ value, label, icon: Icon }) {
 }
 
 function AppShell({ profile, taxonomy, children, view, setView }) {
-  const role = effectiveRole(profile);
+  const role = roleLabel(profile?.role);
   const nav = [
-    { id: "submit", label: "Submit", icon: Send, show: true },
-    { id: "mine", label: "My Status", icon: ListChecks, show: true },
+    { id: "submit", label: "Submit", icon: Send, show: canSubmitAnnouncements(profile) },
+    { id: "mine", label: "My Status", icon: ListChecks, show: canSubmitAnnouncements(profile) },
     { id: "studio", label: "Studio", icon: LayoutDashboard, show: hasStaffAccess(profile) },
     { id: "rundown", label: "Rundown", icon: Clapperboard, show: hasStaffAccess(profile) },
     { id: "admin", label: "Admin", icon: UserCog, show: hasAdminAccess(profile) },
@@ -656,7 +708,7 @@ function AppShell({ profile, taxonomy, children, view, setView }) {
 
   useEffect(() => {
     if (!nav.some((item) => item.id === view)) setView(nav[0]?.id || "submit");
-  }, [profile?.role]);
+  }, [profile?.role, view]);
 
   return html`
     <div className="min-h-screen">
@@ -786,8 +838,9 @@ function SubmissionForm({ profile, taxonomy, editing, onCancel, onSaved, setToas
         await setDoc(announcementRef, {
           ...payload,
           announcementId: announcementRef.id,
-          submittedByUserId: profile.uid,
+          submittedByEmail: normalizeEmail(profile.email),
           submittedByName: profile.displayName || profile.email || "Teacher",
+          submittedByRole: profile.role,
           studioNotes: "",
           status: "Submitted",
           createdAt: serverTimestamp(),
@@ -1669,18 +1722,175 @@ function ScriptPanel({ title, text, copyLabel, setToast }) {
   `;
 }
 
-function AdminPanel({ profile, taxonomy, announcements, setToast }) {
-  const { users, error: usersError } = useUsers(hasAdminAccess(profile));
-  const { rundowns, error: rundownsError } = useRundowns(hasAdminAccess(profile));
-  const [newTaxonomy, setNewTaxonomy] = useState({ name: "", type: "category", color: "#2dd4bf" });
+async function saveAuthorizedUser(email, role, profile) {
+  const authorizationRef = doc(db, "authorizedUsers", email);
+  const authorization = await getDoc(authorizationRef);
 
-  const setRole = async (user, role) => {
-    await updateDoc(doc(db, "users", user.id), {
+  if (authorization.exists()) {
+    await updateDoc(authorizationRef, {
       role,
+      active: true,
       updatedAt: serverTimestamp(),
     });
-    setToast(`${user.displayName || user.email} is now ${role}`);
+    return;
+  }
+
+  await setDoc(authorizationRef, {
+    email,
+    role,
+    active: true,
+    createdAt: serverTimestamp(),
+    createdBy: normalizeEmail(profile.email),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+function AuthorizedUserForm({ role, profile, setToast }) {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const label = roleLabel(role);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    const normalizedEmail = normalizeEmail(email);
+    setError("");
+
+    if (!isValidEmail(normalizedEmail)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (!isAllowedDoralEmail(normalizedEmail)) {
+      setError("Use a Doral staff or student email address.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await saveAuthorizedUser(normalizedEmail, role, profile);
+      setEmail("");
+      setToast(`${normalizedEmail} assigned as ${label}`);
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setBusy(false);
+    }
   };
+
+  return html`
+    <form onSubmit=${submit} className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950/45 p-3">
+      <div>
+        <p className="font-black text-white">Add ${label}</p>
+        <p className="text-sm text-slate-500">Assign access by exact email.</p>
+      </div>
+      <${TextInput}
+        value=${email}
+        type="email"
+        onInput=${(event) => setEmail(event.currentTarget.value)}
+        placeholder=${role === ROLES.STUDIO_CREW ? "student@student.doralacademynv.org" : "admin@doralacademynv.org"}
+        autoCapitalize="none"
+        autoComplete="email"
+        spellCheck=${false}
+      />
+      ${error ? html`<p className="rounded-lg bg-rose-500/10 p-2 text-sm text-rose-200">${error}</p>` : null}
+      <${Button} icon=${Plus} type="submit" disabled=${busy}>
+        ${busy ? "Saving..." : `Add ${label}`}
+      </${Button}>
+    </form>
+  `;
+}
+
+function AuthorizedUserList({ title, role, users, loading, setToast }) {
+  const [busyEmail, setBusyEmail] = useState("");
+  const [error, setError] = useState("");
+  const activeUsers = users.filter((user) => user.active === true && user.role === role);
+
+  const remove = async (user) => {
+    setBusyEmail(user.email);
+    setError("");
+    try {
+      await updateDoc(doc(db, "authorizedUsers", user.id), {
+        active: false,
+        updatedAt: serverTimestamp(),
+      });
+      setToast(`${user.email} removed from ${roleLabel(role)}`);
+    } catch (removeError) {
+      setError(removeError.message);
+    } finally {
+      setBusyEmail("");
+    }
+  };
+
+  return html`
+    <div className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950/45">
+      <div className="border-b border-slate-800 p-3">
+        <h4 className="font-black text-white">${title}</h4>
+      </div>
+      ${error ? html`<p className="m-3 rounded-lg bg-rose-500/10 p-2 text-sm text-rose-200">${error}</p>` : null}
+      ${loading
+        ? html`<p className="p-3 text-sm text-slate-500">Loading assignments...</p>`
+        : activeUsers.length === 0
+          ? html`<p className="p-3 text-sm text-slate-500">No active assignments.</p>`
+          : html`
+              <div className="divide-y divide-slate-800/80">
+                ${activeUsers.map(
+                  (user) => html`
+                    <div key=${user.id} className="grid gap-3 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                      <p className="min-w-0 truncate text-sm font-semibold text-slate-200">${user.email}</p>
+                      <${Button}
+                        icon=${Trash2}
+                        variant="danger"
+                        disabled=${busyEmail === user.email}
+                        onClick=${() => remove(user)}
+                      >
+                        ${busyEmail === user.email ? "Removing..." : "Remove"}
+                      </${Button}>
+                    </div>
+                  `,
+                )}
+              </div>
+            `}
+    </div>
+  `;
+}
+
+function UserManagement({ profile, setToast }) {
+  const { authorizedUsers, loading, error } = useAuthorizedUsers(true);
+
+  return html`
+    <div className="glass-panel rounded-xl p-4">
+      <div className="mb-4">
+        <p className="text-xs font-bold uppercase tracking-[0.22em] text-mint">Access Control</p>
+        <h3 className="mt-1 font-black text-white">User Management</h3>
+      </div>
+      ${error ? html`<p className="mb-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${error}</p>` : null}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <${AuthorizedUserForm} role=${ROLES.ADMIN} profile=${profile} setToast=${setToast} />
+        <${AuthorizedUserForm} role=${ROLES.STUDIO_CREW} profile=${profile} setToast=${setToast} />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <${AuthorizedUserList}
+          title="Assigned Admins"
+          role=${ROLES.ADMIN}
+          users=${authorizedUsers}
+          loading=${loading}
+          setToast=${setToast}
+        />
+        <${AuthorizedUserList}
+          title="Assigned Studio Crew"
+          role=${ROLES.STUDIO_CREW}
+          users=${authorizedUsers}
+          loading=${loading}
+          setToast=${setToast}
+        />
+      </div>
+    </div>
+  `;
+}
+
+function AdminPanel({ profile, taxonomy, announcements, setToast }) {
+  const { rundowns, error: rundownsError } = useRundowns(hasAdminAccess(profile));
+  const [newTaxonomy, setNewTaxonomy] = useState({ name: "", type: "category", color: "#2dd4bf" });
 
   const addTaxonomy = async (event) => {
     event.preventDefault();
@@ -1738,32 +1948,13 @@ function AdminPanel({ profile, taxonomy, announcements, setToast }) {
         <p className="text-xs font-bold uppercase tracking-[0.22em] text-mint">Adviser Console</p>
         <h2 className="mt-1 text-2xl font-black text-white">Admin Role Management</h2>
       </div>
-      ${usersError || rundownsError
-        ? html`<p className="rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${usersError || rundownsError}</p>`
+      ${rundownsError
+        ? html`<p className="rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${rundownsError}</p>`
         : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="glass-panel overflow-hidden rounded-xl">
-          <div className="border-b border-slate-800 p-4">
-            <h3 className="font-black text-white">Users</h3>
-          </div>
-          <div className="divide-y divide-slate-800/80">
-            ${users.map(
-              (user) => html`
-                <div key=${user.id} className="grid gap-3 p-4 md:grid-cols-[1fr_220px] md:items-center">
-                  <div className="min-w-0">
-                    <p className="truncate font-black text-white">${user.displayName || "Unnamed user"}</p>
-                    <p className="truncate text-sm text-slate-400">${user.email}</p>
-                  </div>
-                  <${Select} value=${user.role} onChange=${(event) => setRole(user, event.currentTarget.value)}>
-                    ${ROLES.map((role) => html`<option key=${role} value=${role}>${role}</option>`)}
-                  </${Select}>
-                </div>
-              `,
-            )}
-          </div>
-        </div>
+      <${UserManagement} profile=${profile} setToast=${setToast} />
 
+      <div>
         <div className="glass-panel rounded-xl p-4">
           <h3 className="mb-3 font-black text-white">Categories & Priority Labels</h3>
           <form onSubmit=${addTaxonomy} className="grid gap-3">
@@ -1894,10 +2085,37 @@ function LoadingScreen() {
   `;
 }
 
+function AccessDeniedScreen({ profile, error }) {
+  return html`
+    <main className="grid min-h-screen place-items-center px-4">
+      <section className="glass-panel w-full max-w-lg rounded-2xl p-5 text-center sm:p-7">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-rose-500/15 text-rose-100 ring-1 ring-rose-400/30">
+          <${ShieldCheck} size=${24} />
+        </div>
+        <p className="text-xs font-bold uppercase tracking-[0.22em] text-rose-200">Access Denied</p>
+        <h1 className="mt-2 text-2xl font-black text-white">This account is not authorized.</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-400">
+          ${profile?.email || "This Google account"} does not have Broadcast Desk access.
+        </p>
+        ${error ? html`<p className="mt-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${error}</p>` : null}
+        <${Button} icon=${LogOut} variant="ghost" className="mt-5 w-full" onClick=${() => signOut(auth)}>
+          Sign out
+        </${Button}>
+      </section>
+    </main>
+  `;
+}
+
+function defaultViewForProfile(profile) {
+  if (hasAdminAccess(profile)) return "admin";
+  if (profile?.role === ROLES.STUDIO_CREW) return "studio";
+  return "submit";
+}
+
 function App() {
   const { user, profile, loading, error } = useAuthProfile();
-  const taxonomy = useTaxonomy(Boolean(profile?.uid));
-  const [view, setView] = useState("submit");
+  const taxonomy = useTaxonomy(hasAppAccess(profile));
+  const [view, setView] = useState("");
   const [toast, setToast] = useState("");
   const { announcements } = useAnnouncements(profile);
 
@@ -1907,11 +2125,17 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
+  useEffect(() => {
+    if (profile?.role) setView(defaultViewForProfile(profile));
+  }, [profile?.email, profile?.role]);
+
   if (loading) return html`<${LoadingScreen} />`;
   if (!user) return html`<${LoginScreen} error=${error} />`;
+  if (!hasAppAccess(profile)) return html`<${AccessDeniedScreen} profile=${profile} error=${error} />`;
 
+  const activeView = view || defaultViewForProfile(profile);
   let content = null;
-  if (view === "submit") {
+  if (activeView === "submit" && canSubmitAnnouncements(profile)) {
     content = html`
       <${SubmissionForm}
         profile=${profile}
@@ -1919,13 +2143,13 @@ function App() {
         setToast=${setToast}
       />
     `;
-  } else if (view === "mine") {
+  } else if (activeView === "mine" && canSubmitAnnouncements(profile)) {
     content = html`<${TeacherStatus} profile=${profile} taxonomy=${taxonomy} setToast=${setToast} />`;
-  } else if (view === "studio" && hasStaffAccess(profile)) {
+  } else if (activeView === "studio" && hasStaffAccess(profile)) {
     content = html`<${StudioDashboard} profile=${profile} setToast=${setToast} />`;
-  } else if (view === "rundown" && hasStaffAccess(profile)) {
+  } else if (activeView === "rundown" && hasStaffAccess(profile)) {
     content = html`<${RundownBuilder} profile=${profile} setToast=${setToast} />`;
-  } else if (view === "admin" && hasAdminAccess(profile)) {
+  } else if (activeView === "admin" && hasAdminAccess(profile)) {
     content = html`
       <${AdminPanel}
         profile=${profile}
@@ -1939,7 +2163,7 @@ function App() {
   }
 
   return html`
-    <${AppShell} profile=${profile} taxonomy=${taxonomy} view=${view} setView=${setView}>
+    <${AppShell} profile=${profile} taxonomy=${taxonomy} view=${activeView} setView=${setView}>
       ${content}
     </${AppShell}>
     <${Toast} message=${toast} />
