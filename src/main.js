@@ -64,6 +64,10 @@ const ROLE_LABELS = {
   [ROLES.ACCESS_DENIED]: "Access Denied",
 };
 const ASSIGNED_ROLES = [ROLES.ADMIN, ROLES.STUDIO_CREW];
+const REQUIRED_ADMIN_EMAILS = [
+  "joseph.clark@doralacademynv.org",
+  "koby.walsh@doralacademynv.org",
+];
 const DORAL_STAFF_DOMAIN = "@doralacademynv.org";
 const DORAL_STUDENT_DOMAIN = "@student.doralacademynv.org";
 const ANNOUNCEMENT_STATUSES = [
@@ -182,6 +186,10 @@ function isStudentEmail(email) {
 
 function isAllowedDoralEmail(email) {
   return isTeacherEmail(email) || isStudentEmail(email);
+}
+
+function isRequiredAdminEmail(email) {
+  return REQUIRED_ADMIN_EMAILS.includes(normalizeEmail(email));
 }
 
 function isValidEmail(email) {
@@ -365,6 +373,7 @@ function EmptyState({ icon: Icon = Sparkles, title, body }) {
 async function resolveUserRole(signedInUser) {
   const email = normalizeEmail(signedInUser?.email);
   if (!isAllowedDoralEmail(email)) return { email, role: ROLES.ACCESS_DENIED };
+  if (isRequiredAdminEmail(email)) return { email, role: ROLES.ADMIN };
 
   const authorization = await getDoc(doc(db, "authorizedUsers", email));
   const assignedUser = authorization?.exists() ? authorization.data() : null;
@@ -1803,7 +1812,25 @@ function AuthorizedUserForm({ role, profile, setToast }) {
 function AuthorizedUserList({ title, role, users, loading, setToast }) {
   const [busyEmail, setBusyEmail] = useState("");
   const [error, setError] = useState("");
-  const activeUsers = users.filter((user) => user.active === true && user.role === role);
+  const requiredAdmins =
+    role === ROLES.ADMIN
+      ? REQUIRED_ADMIN_EMAILS.map((email) => ({
+          id: `required-${email}`,
+          email,
+          role,
+          active: true,
+          required: true,
+        }))
+      : [];
+  const activeUsers = [
+    ...requiredAdmins,
+    ...users.filter(
+      (user) =>
+        user.active === true &&
+        user.role === role &&
+        !requiredAdmins.some((requiredAdmin) => requiredAdmin.email === user.email),
+    ),
+  ];
 
   const remove = async (user) => {
     setBusyEmail(user.email);
@@ -1836,15 +1863,22 @@ function AuthorizedUserList({ title, role, users, loading, setToast }) {
                 ${activeUsers.map(
                   (user) => html`
                     <div key=${user.id} className="grid gap-3 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
-                      <p className="min-w-0 truncate text-sm font-semibold text-slate-200">${user.email}</p>
-                      <${Button}
-                        icon=${Trash2}
-                        variant="danger"
-                        disabled=${busyEmail === user.email}
-                        onClick=${() => remove(user)}
-                      >
-                        ${busyEmail === user.email ? "Removing..." : "Remove"}
-                      </${Button}>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-200">${user.email}</p>
+                        ${user.required ? html`<p className="text-xs text-slate-500">Required admin</p>` : null}
+                      </div>
+                      ${user.required
+                        ? html`<${IconBadge} icon=${Lock}>Built in</${IconBadge}>`
+                        : html`
+                            <${Button}
+                              icon=${Trash2}
+                              variant="danger"
+                              disabled=${busyEmail === user.email}
+                              onClick=${() => remove(user)}
+                            >
+                              ${busyEmail === user.email ? "Removing..." : "Remove"}
+                            </${Button}>
+                          `}
                     </div>
                   `,
                 )}

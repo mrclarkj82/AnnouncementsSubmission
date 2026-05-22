@@ -35,6 +35,14 @@ service cloud.firestore {
       return isTeacherEmail() || isStudentEmail();
     }
 
+    function isRequiredAdmin() {
+      return hasEmail()
+        && signedInEmail() in [
+          "joseph.clark@doralacademynv.org",
+          "koby.walsh@doralacademynv.org"
+        ];
+    }
+
     function authorizedUserPath(userEmail) {
       return /databases/$(database)/documents/authorizedUsers/$(userEmail);
     }
@@ -48,7 +56,7 @@ service cloud.firestore {
     }
 
     function role() {
-      return hasAssignedRole("admin")
+      return isRequiredAdmin() || hasAssignedRole("admin")
         ? "admin"
         : (
           hasAssignedRole("studioCrew")
