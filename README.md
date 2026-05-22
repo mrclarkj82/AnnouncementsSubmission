@@ -22,7 +22,6 @@ firebase deploy --only firestore:rules
 ```
 
 3. Sign in once. New profiles are created as `Teacher`, except bootstrap admin emails.
-4. Bootstrap admins are `joseph.clark@doralacademynv.org` and `koby.walsh@doralacademynv.org`.
 5. Admins can assign `Teacher`, `Studio Team`, and `Admin/Adviser` roles from the app.
 
 Teachers only paste Google Drive links; the app does not upload video files.
