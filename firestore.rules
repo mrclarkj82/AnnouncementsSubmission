@@ -254,6 +254,11 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /rundownItems/{rundownItemId} {
+      allow get, list: if isStaff();
+      allow create, update, delete: if isAdmin();
+    }
+
     match /categories/{categoryId} {
       allow get, list: if hasAppAccess();
       allow create, update, delete: if isAdmin();

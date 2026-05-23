@@ -26,4 +26,6 @@ firebase deploy --only firestore:rules
 
 Teachers do not need pre-created user records. A Google account ending in `@doralacademynv.org` can submit announcements automatically. Student accounts ending in `@student.doralacademynv.org` need an active `authorizedUsers` assignment with role `studioCrew` or `admin`.
 
+Studio crew and admins can use Teleprompter Mode to display the finalized daily rundown script. It reads from `rundowns/{date}` and, when present, matching `rundownItems` documents.
+
 Teachers only paste Google Drive links; the app does not upload video files.

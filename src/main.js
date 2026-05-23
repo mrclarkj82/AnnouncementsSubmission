@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { html } from "htm/react";
 import {
@@ -16,15 +16,22 @@ import {
   Lock,
   LogIn,
   LogOut,
+  Maximize,
   Megaphone,
+  Minus,
+  Moon,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RefreshCcw,
+  Rewind,
   RotateCcw,
   Save,
   Send,
   ShieldCheck,
   Sparkles,
+  Sun,
   Trash2,
   Unlock,
   UserCog,
@@ -89,6 +96,7 @@ const ITEM_STATUSES = [
   "Skipped",
   "Archived",
 ];
+const PROMPTER_ITEM_STATUSES = ["Approved", "Ready for Broadcast"];
 const RUNDOWN_SECTIONS = [
   "Intro",
   "Main Announcements",
@@ -258,6 +266,10 @@ function buildAnnouncementScript(announcement) {
 
 function normalizeOrders(items) {
   return items.map((item, index) => ({ ...item, order: index + 1 }));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 async function copyText(text, label, setToast) {
@@ -563,6 +575,41 @@ function useRundown(date) {
   return { rundown, loading, error };
 }
 
+function useRundownItems(date, enabled) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!enabled || !date) {
+      setItems([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+    setLoading(true);
+    const request = query(collection(db, "rundownItems"), where("rundownId", "==", date));
+    const unsubscribe = onSnapshot(
+      request,
+      (snapshot) => {
+        setItems(
+          snapshot.docs
+            .map((item) => ({ id: item.id, ...item.data() }))
+            .sort((a, b) => (a.order || 0) - (b.order || 0)),
+        );
+        setLoading(false);
+      },
+      (snapshotError) => {
+        setError(snapshotError.message);
+        setLoading(false);
+      },
+    );
+    return unsubscribe;
+  }, [date, enabled]);
+
+  return { items, loading, error };
+}
+
 function useAuthorizedUsers(enabled) {
   const [authorizedUsers, setAuthorizedUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -712,6 +759,7 @@ function AppShell({ profile, taxonomy, children, view, setView }) {
     { id: "mine", label: "My Status", icon: ListChecks, show: canSubmitAnnouncements(profile) },
     { id: "studio", label: "Studio", icon: LayoutDashboard, show: hasStaffAccess(profile) },
     { id: "rundown", label: "Rundown", icon: Clapperboard, show: hasStaffAccess(profile) },
+    { id: "teleprompter", label: "Teleprompter", icon: Maximize, show: hasStaffAccess(profile) },
     { id: "admin", label: "Admin", icon: UserCog, show: hasAdminAccess(profile) },
   ].filter((item) => item.show);
 
@@ -1692,6 +1740,307 @@ function buildRundownScript({ date, items }) {
   return lines.join("\n").trim();
 }
 
+function teleprompterSourceItems(rundown, rundownItems) {
+  const source = rundownItems.length ? rundownItems : rundown?.items || [];
+  return normalizeOrders(
+    source
+      .map((item, index) => ({
+        itemId: item.itemId || item.id || `teleprompter-${index}`,
+        title: safeText(item.title) || `Segment ${index + 1}`,
+        scriptText: safeText(item.scriptText || item.text || item.script),
+        section: safeText(item.section) || "Main Announcements",
+        status: item.status || "Submitted",
+        order: Number(item.order) || index + 1,
+      }))
+      .filter((item) => PROMPTER_ITEM_STATUSES.includes(item.status))
+      .filter((item) => safeText(item.scriptText)),
+  );
+}
+
+function buildTeleprompterSegments(items) {
+  const extraSections = [
+    ...new Set(
+      items
+        .map((item) => item.section)
+        .filter((section) => section && !RUNDOWN_SECTIONS.includes(section)),
+    ),
+  ];
+  return [...RUNDOWN_SECTIONS, ...extraSections]
+    .map((section) => ({
+      section,
+      items: items.filter((item) => item.section === section).sort((a, b) => a.order - b.order),
+    }))
+    .filter((segment) => segment.items.length > 0);
+}
+
+function TeleprompterMode({ profile }) {
+  const [date, setDate] = useState(todayISO());
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(42);
+  const [fontSize, setFontSize] = useState(58);
+  const [theme, setTheme] = useState("dark");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const stageRef = useRef(null);
+  const scrollRef = useRef(null);
+  const { rundown, loading, error } = useRundown(date);
+  const {
+    items: rundownItems,
+    loading: rundownItemsLoading,
+    error: rundownItemsError,
+  } = useRundownItems(date, hasStaffAccess(profile));
+  const finalRundown = Boolean(rundown?.locked || rundown?.status === "Finalized");
+  const teleprompterItems = useMemo(
+    () => (finalRundown ? teleprompterSourceItems(rundown, rundownItems) : []),
+    [finalRundown, rundown?.items, rundownItems],
+  );
+  const segments = useMemo(() => buildTeleprompterSegments(teleprompterItems), [teleprompterItems]);
+  const hasScript = segments.length > 0;
+  const lightMode = theme === "light";
+
+  const updateSpeed = (delta) => setSpeed((current) => clamp(current + delta, 0, 180));
+  const updateFontSize = (delta) => setFontSize((current) => clamp(current + delta, 32, 110));
+
+  const restart = () => {
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      await stageRef.current?.requestFullscreen?.();
+    } else {
+      await document.exitFullscreen?.();
+    }
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === stageRef.current);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    if (!playing || !hasScript) return undefined;
+    let frameId = 0;
+    let lastTime = performance.now();
+
+    const tick = (time) => {
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const elapsed = Math.min(time - lastTime, 120);
+      lastTime = time;
+      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+      scroller.scrollTop = Math.min(maxScroll, scroller.scrollTop + (speed * elapsed) / 1000);
+      if (scroller.scrollTop >= maxScroll - 1) {
+        setPlaying(false);
+        return;
+      }
+      frameId = window.requestAnimationFrame(tick);
+    };
+
+    frameId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [playing, speed, hasScript]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      const tagName = event.target?.tagName;
+      const editingField = ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
+      if (editingField && event.key !== "Escape") return;
+
+      if (event.key === " ") {
+        event.preventDefault();
+        if (hasScript) setPlaying((current) => !current);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        updateSpeed(-6);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        updateSpeed(6);
+      } else if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        updateFontSize(4);
+      } else if (event.key === "-" || event.key === "_") {
+        event.preventDefault();
+        updateFontSize(-4);
+      } else if (event.key === "Escape" && document.fullscreenElement) {
+        document.exitFullscreen?.();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [hasScript]);
+
+  useEffect(() => {
+    setPlaying(false);
+    restart();
+  }, [date, finalRundown]);
+
+  const surfaceClasses = lightMode
+    ? "border-slate-200 bg-slate-50 text-slate-950"
+    : "border-slate-800 bg-black text-white";
+  const controlClasses = lightMode
+    ? "border-slate-300 bg-white/92 text-slate-950 shadow-xl"
+    : "border-slate-700 bg-slate-950/88 text-white shadow-glow";
+  const subtleButtonVariant = lightMode ? "secondary" : "ghost";
+  const loadingScript = loading || rundownItemsLoading;
+  const hasEmbeddedItems = Boolean((rundown?.items || []).length);
+  const combinedError = error || (!hasEmbeddedItems ? rundownItemsError : "");
+
+  return html`
+    <section className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.22em] text-mint">Teleprompter Mode</p>
+          <h2 className="mt-1 text-2xl font-black text-white">${toDateLabel(date)}</h2>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          ${finalRundown
+            ? html`<${IconBadge} icon=${Lock} className="text-emerald-200">Final Rundown</${IconBadge}>`
+            : html`<${StatusBadge} status=${rundown?.status || "No Rundown"} />`}
+          <${IconBadge} icon=${CalendarDays}>${teleprompterItems.length} anchor items</${IconBadge}>
+        </div>
+      </div>
+
+      <div
+        ref=${stageRef}
+        className=${classNames(
+          "teleprompter-stage relative min-h-[calc(100vh-10rem)] overflow-hidden rounded-2xl border",
+          surfaceClasses,
+        )}
+      >
+        <div
+          className=${classNames(
+            "absolute left-3 right-3 top-3 z-20 rounded-xl border p-3 transition-opacity duration-500 sm:left-5 sm:right-5 sm:top-5",
+            controlClasses,
+            playing ? "opacity-25 hover:opacity-100 focus-within:opacity-100" : "opacity-100",
+          )}
+        >
+          <div className="grid gap-3 lg:grid-cols-[auto_1fr_1fr_auto] lg:items-center">
+            <div className="grid grid-cols-[1fr_auto] gap-2 sm:flex sm:items-center">
+              <input
+                type="date"
+                value=${date}
+                onInput=${(event) => setDate(event.currentTarget.value)}
+                className=${classNames(
+                  "min-h-10 rounded-lg border px-3 py-2 text-sm font-bold outline-none",
+                  lightMode ? "border-slate-300 bg-white text-slate-950" : "border-slate-700 bg-slate-950 text-white",
+                )}
+              />
+              <${Button}
+                icon=${playing ? Pause : Play}
+                disabled=${!hasScript}
+                onClick=${() => setPlaying((current) => !current)}
+              >
+                ${playing ? "Pause" : "Play"}
+              </${Button}>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+              <${Button} icon=${Minus} variant=${subtleButtonVariant} onClick=${() => updateSpeed(-6)}>Speed</${Button}>
+              <input
+                type="range"
+                min="0"
+                max="180"
+                value=${speed}
+                onInput=${(event) => setSpeed(Number(event.currentTarget.value))}
+                className="w-full accent-teal-300"
+                aria-label="Scroll speed"
+              />
+              <${Button} icon=${Plus} variant=${subtleButtonVariant} onClick=${() => updateSpeed(6)}>${speed}</${Button}>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+              <${Button} icon=${Minus} variant=${subtleButtonVariant} onClick=${() => updateFontSize(-4)}>Text</${Button}>
+              <input
+                type="range"
+                min="32"
+                max="110"
+                value=${fontSize}
+                onInput=${(event) => setFontSize(Number(event.currentTarget.value))}
+                className="w-full accent-teal-300"
+                aria-label="Font size"
+              />
+              <${Button} icon=${Plus} variant=${subtleButtonVariant} onClick=${() => updateFontSize(4)}>${fontSize}</${Button}>
+            </div>
+
+            <div className="flex flex-wrap gap-2 lg:justify-end">
+              <${Button} icon=${Rewind} variant=${subtleButtonVariant} onClick=${restart}>Top</${Button}>
+              <${Button}
+                icon=${lightMode ? Moon : Sun}
+                variant=${subtleButtonVariant}
+                onClick=${() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+              >
+                ${lightMode ? "Dark" : "Light"}
+              </${Button}>
+              <${Button} icon=${Maximize} variant="secondary" onClick=${toggleFullscreen}>
+                ${isFullscreen ? "Exit" : "Full"}
+              </${Button}>
+            </div>
+          </div>
+        </div>
+
+        <div
+          ref=${scrollRef}
+          className="prompter-scroll h-[calc(100vh-10rem)] overflow-y-auto scroll-smooth px-5 pb-40 pt-44 thin-scroll sm:px-10 sm:pt-36 lg:px-16"
+        >
+          <div className="mx-auto max-w-6xl">
+            ${combinedError
+              ? html`<div className="rounded-xl bg-rose-500/10 p-5 text-xl text-rose-200">${combinedError}</div>`
+              : loadingScript
+                ? html`<div className="pt-24 text-center text-3xl font-black">Loading script...</div>`
+                : !rundown
+                  ? html`<div className="pt-24 text-center text-3xl font-black">No rundown for this date.</div>`
+                  : !finalRundown
+                    ? html`<div className="pt-24 text-center text-3xl font-black">Rundown is not finalized yet.</div>`
+                    : !hasScript
+                      ? html`<div className="pt-24 text-center text-3xl font-black">No approved or ready anchor items.</div>`
+                      : html`
+                          <article
+                            className=${classNames("pb-[45vh]", lightMode ? "text-slate-950" : "text-white")}
+                            style=${{ fontSize: `${fontSize}px`, lineHeight: 1.42 }}
+                          >
+                            <header className="mb-16 border-b pb-8 ${lightMode ? "border-slate-300" : "border-slate-700"}">
+                              <p className="text-[0.32em] font-black uppercase tracking-[0.22em] text-teal-400">
+                                Broadcast Desk
+                              </p>
+                              <h1 className="mt-3 text-[0.78em] font-black leading-tight">
+                                ${toDateLabel(date)}
+                              </h1>
+                            </header>
+
+                            ${segments.map(
+                              (segment) => html`
+                                <section key=${segment.section} className="mb-20">
+                                  <h2 className="mb-8 rounded-lg border-l-4 border-teal-300 pl-5 text-[0.46em] font-black uppercase tracking-[0.12em] text-teal-300">
+                                    ${segment.section}
+                                  </h2>
+                                  <div className="space-y-14">
+                                    ${segment.items.map(
+                                      (item) => html`
+                                        <div key=${item.itemId} className="space-y-5">
+                                          <h3 className=${classNames("text-[0.42em] font-black uppercase tracking-[0.08em]", lightMode ? "text-slate-500" : "text-slate-400")}>
+                                            ${item.title}
+                                          </h3>
+                                          <p className="whitespace-pre-wrap">${item.scriptText}</p>
+                                        </div>
+                                      `,
+                                    )}
+                                  </div>
+                                </section>
+                              `,
+                            )}
+                          </article>
+                        `}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function buildPrintableRundown({ date, items, status }) {
   const lines = [`BROADCAST RUNDOWN - ${toDateLabel(date)}`, `STATUS: ${status}`, ""];
   RUNDOWN_SECTIONS.forEach((section) => {
@@ -2183,6 +2532,8 @@ function App() {
     content = html`<${StudioDashboard} profile=${profile} setToast=${setToast} />`;
   } else if (activeView === "rundown" && hasStaffAccess(profile)) {
     content = html`<${RundownBuilder} profile=${profile} setToast=${setToast} />`;
+  } else if (activeView === "teleprompter" && hasStaffAccess(profile)) {
+    content = html`<${TeleprompterMode} profile=${profile} />`;
   } else if (activeView === "admin" && hasAdminAccess(profile)) {
     content = html`
       <${AdminPanel}

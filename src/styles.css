@@ -99,6 +99,16 @@ textarea:disabled {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+.teleprompter-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+}
+
+.teleprompter-stage:fullscreen .prompter-scroll {
+  height: 100vh;
+}
+
 @media print {
   body {
     background: #fff;
