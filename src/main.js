@@ -5,6 +5,8 @@ import {
   Archive,
   CalendarDays,
   Check,
+  ChevronDown,
+  ChevronUp,
   Clipboard,
   Clapperboard,
   ExternalLink,
@@ -97,6 +99,18 @@ const ITEM_STATUSES = [
   "Archived",
 ];
 const PROMPTER_ITEM_STATUSES = ["Approved", "Ready for Broadcast"];
+const DEFAULT_STUDIO_CHECKLIST_LABELS = [
+  "Mic check completed",
+  "Camera batteries checked",
+  "OBS scenes loaded",
+  "Intro video ready",
+  "Audio levels checked",
+  "Teleprompter loaded",
+  "Stream tested",
+  "Graphics package loaded",
+  "Lower thirds ready",
+  "Sports video loaded",
+];
 const RUNDOWN_SECTIONS = [
   "Intro",
   "Main Announcements",
@@ -266,6 +280,38 @@ function buildAnnouncementScript(announcement) {
 
 function normalizeOrders(items) {
   return items.map((item, index) => ({ ...item, order: index + 1 }));
+}
+
+function normalizeChecklistItems(items) {
+  return (items || [])
+    .map((item, index) => ({
+      id: item.id || `checklist-${index}`,
+      label: safeText(item.label),
+      completed: Boolean(item.completed),
+      completedBy: item.completedBy || "",
+      completedAt: item.completedAt || null,
+    }))
+    .filter((item) => item.label);
+}
+
+function newChecklistItem(label) {
+  return {
+    id: `checklist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: safeText(label),
+    completed: false,
+    completedBy: "",
+    completedAt: null,
+  };
+}
+
+function serializeChecklistItems(items) {
+  return normalizeChecklistItems(items).map((item) => ({
+    id: item.id,
+    label: safeText(item.label),
+    completed: Boolean(item.completed),
+    completedBy: item.completed ? item.completedBy || "" : "",
+    completedAt: item.completed ? item.completedAt || new Date() : null,
+  }));
 }
 
 function clamp(value, min, max) {
@@ -1516,6 +1562,13 @@ function RundownBuilder({ profile, setToast }) {
 
       ${error ? html`<p className="rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${error}</p>` : null}
 
+      <${StudioChecklist}
+        profile=${profile}
+        date=${date}
+        rundown=${rundown}
+        setToast=${setToast}
+      />
+
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <div className="space-y-4">
           <div className="glass-panel rounded-xl p-4">
@@ -1621,6 +1674,340 @@ function RundownBuilder({ profile, setToast }) {
         </aside>
       </div>
     </section>
+  `;
+}
+
+function StudioChecklist({ profile, date, rundown, setToast }) {
+  const storageKey = "broadcastDesk.studioChecklistOpen";
+  const [open, setOpen] = useState(() => window.sessionStorage.getItem(storageKey) !== "false");
+  const [newLabel, setNewLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const checklistItems = useMemo(
+    () => normalizeChecklistItems(rundown?.checklistItems || []),
+    [rundown?.checklistItems],
+  );
+  const completedCount = checklistItems.filter((item) => item.completed).length;
+  const rundownRef = doc(db, "rundowns", date);
+
+  useEffect(() => {
+    window.sessionStorage.setItem(storageKey, open ? "true" : "false");
+  }, [open]);
+
+  const saveChecklist = async (nextItems, message) => {
+    const checklistItemsPayload = serializeChecklistItems(nextItems);
+    setBusy(true);
+    setError("");
+    try {
+      if (rundown) {
+        await updateDoc(rundownRef, {
+          checklistItems: checklistItemsPayload,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(
+          rundownRef,
+          {
+            rundownId: date,
+            date,
+            status: "Draft",
+            locked: false,
+            items: [],
+            checklistItems: checklistItemsPayload,
+            createdBy: profile.uid,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+      }
+      if (message) setToast(message);
+    } catch (checklistError) {
+      setError(checklistError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addItem = async (event) => {
+    event.preventDefault();
+    const label = safeText(newLabel);
+    if (!label) return;
+    await saveChecklist([...checklistItems, newChecklistItem(label)], "Checklist item added");
+    setNewLabel("");
+  };
+
+  const addStarterItems = async () => {
+    await saveChecklist(
+      DEFAULT_STUDIO_CHECKLIST_LABELS.map((label) => newChecklistItem(label)),
+      "Starter checklist added",
+    );
+  };
+
+  const updateItem = async (itemId, patch, message = "") => {
+    await saveChecklist(
+      checklistItems.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
+      message,
+    );
+  };
+
+  const toggleItem = async (item) => {
+    const completed = !item.completed;
+    await updateItem(
+      item.id,
+      {
+        completed,
+        completedBy: completed ? profile.email : "",
+        completedAt: completed ? new Date() : null,
+      },
+      completed ? "Checklist item completed" : "Checklist item reopened",
+    );
+  };
+
+  const removeItem = async (itemId) => {
+    await saveChecklist(
+      checklistItems.filter((item) => item.id !== itemId),
+      "Checklist item removed",
+    );
+  };
+
+  const moveItem = async (index, direction) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= checklistItems.length) return;
+    const nextItems = [...checklistItems];
+    const [moving] = nextItems.splice(index, 1);
+    nextItems.splice(nextIndex, 0, moving);
+    await saveChecklist(nextItems);
+  };
+
+  const markAllComplete = async () => {
+    const now = new Date();
+    await saveChecklist(
+      checklistItems.map((item) => ({
+        ...item,
+        completed: true,
+        completedBy: item.completedBy || profile.email,
+        completedAt: item.completedAt || now,
+      })),
+      "Checklist marked complete",
+    );
+  };
+
+  return html`
+    <section className="glass-panel overflow-hidden rounded-xl">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 p-4 text-left transition hover:bg-slate-900/60"
+        onClick=${() => setOpen((current) => !current)}
+        aria-expanded=${open}
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <${open ? ChevronUp : ChevronDown} size=${20} className="text-mint" />
+            <h3 className="font-black text-white">Studio Checklist</h3>
+            <span className="rounded-full bg-slate-950/70 px-2.5 py-1 text-xs font-bold text-slate-300 ring-1 ring-slate-700">
+              ${completedCount}/${checklistItems.length} complete
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Daily setup steps for ${toDateLabel(date)}
+          </p>
+        </div>
+        <span className="shrink-0 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
+          ${open ? "Hide" : "Show"}
+        </span>
+      </button>
+
+      <div
+        className=${classNames(
+          "grid transition-all duration-300 ease-out",
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="border-t border-slate-800 p-4">
+            ${error ? html`<p className="mb-3 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${error}</p>` : null}
+            <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+              <div className="space-y-2">
+                ${checklistItems.length === 0
+                  ? html`
+                      <div className="rounded-lg border border-dashed border-slate-700 p-4 text-sm text-slate-500">
+                        No checklist items assigned for this rundown yet.
+                      </div>
+                    `
+                  : checklistItems.map(
+                      (item, index) => html`
+                        <${StudioChecklistRow}
+                          key=${item.id}
+                          item=${item}
+                          index=${index}
+                          total=${checklistItems.length}
+                          busy=${busy}
+                          onToggle=${toggleItem}
+                          onRename=${(label) => updateItem(item.id, { label }, "Checklist item updated")}
+                          onMove=${moveItem}
+                          onRemove=${removeItem}
+                        />
+                      `,
+                    )}
+              </div>
+
+              <aside className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/45 p-3">
+                <form onSubmit=${addItem} className="grid gap-2">
+                  <${Field} label="Add checklist item">
+                    <${TextInput}
+                      value=${newLabel}
+                      disabled=${busy}
+                      onInput=${(event) => setNewLabel(event.currentTarget.value)}
+                      placeholder="Teleprompter loaded"
+                    />
+                  </${Field}>
+                  <${Button} icon=${Plus} type="submit" disabled=${busy || !safeText(newLabel)}>
+                    Add item
+                  </${Button}>
+                </form>
+                <div className="grid gap-2">
+                  <${Button}
+                    icon=${Check}
+                    variant="success"
+                    disabled=${busy || checklistItems.length === 0}
+                    onClick=${markAllComplete}
+                  >
+                    Mark all complete
+                  </${Button}>
+                  <${Button}
+                    icon=${ListChecks}
+                    variant="secondary"
+                    disabled=${busy || checklistItems.length > 0}
+                    onClick=${addStarterItems}
+                  >
+                    Add starter checklist
+                  </${Button}>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function StudioChecklistRow({ item, index, total, busy, onToggle, onRename, onMove, onRemove }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.label);
+
+  useEffect(() => setDraft(item.label), [item.id, item.label]);
+
+  const save = async () => {
+    const label = safeText(draft);
+    if (!label) return;
+    await onRename(label);
+    setEditing(false);
+  };
+
+  return html`
+    <div
+      className=${classNames(
+        "rounded-lg border p-3 transition",
+        item.completed
+          ? "border-emerald-400/20 bg-emerald-500/10"
+          : "border-slate-800 bg-slate-950/45",
+      )}
+    >
+      <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+        <label className="flex min-w-0 items-start gap-3">
+          <input
+            type="checkbox"
+            checked=${item.completed}
+            disabled=${busy}
+            onChange=${() => onToggle(item)}
+            className="mt-1 h-5 w-5 rounded border-slate-600 bg-slate-950 accent-teal-300"
+          />
+          <div className="min-w-0 flex-1">
+            ${editing
+              ? html`
+                  <${TextInput}
+                    value=${draft}
+                    disabled=${busy}
+                    onInput=${(event) => setDraft(event.currentTarget.value)}
+                    onKeyDown=${(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        save();
+                      }
+                      if (event.key === "Escape") {
+                        setDraft(item.label);
+                        setEditing(false);
+                      }
+                    }}
+                    autoFocus=${true}
+                  />
+                `
+              : html`
+                  <p
+                    className=${classNames(
+                      "font-bold text-white transition",
+                      item.completed ? "text-slate-400 line-through decoration-emerald-300/70" : "",
+                    )}
+                  >
+                    ${item.label}
+                  </p>
+                `}
+            ${item.completed
+              ? html`
+                  <p className="mt-1 text-xs text-emerald-200/80">
+                    Completed by ${item.completedBy || "studio"} at ${timestampLabel(item.completedAt)}
+                  </p>
+                `
+              : null}
+          </div>
+        </label>
+
+        <div className="flex flex-wrap gap-2 md:justify-end">
+          ${editing
+            ? html`
+                <${Button} icon=${Save} variant="success" disabled=${busy || !safeText(draft)} onClick=${save}>
+                  Save
+                </${Button}>
+                <${Button}
+                  icon=${X}
+                  variant="ghost"
+                  disabled=${busy}
+                  onClick=${() => {
+                    setDraft(item.label);
+                    setEditing(false);
+                  }}
+                >
+                  Cancel
+                </${Button}>
+              `
+            : html`
+                <${Button} icon=${Pencil} variant="ghost" disabled=${busy} onClick=${() => setEditing(true)}>
+                  Edit
+                </${Button}>
+              `}
+          <${Button}
+            icon=${ChevronUp}
+            variant="ghost"
+            disabled=${busy || index === 0}
+            onClick=${() => onMove(index, -1)}
+          >
+            Up
+          </${Button}>
+          <${Button}
+            icon=${ChevronDown}
+            variant="ghost"
+            disabled=${busy || index === total - 1}
+            onClick=${() => onMove(index, 1)}
+          >
+            Down
+          </${Button}>
+          <${Button} icon=${Trash2} variant="danger" disabled=${busy} onClick=${() => onRemove(item.id)}>
+            Remove
+          </${Button}>
+        </div>
+      </div>
+    </div>
   `;
 }
 

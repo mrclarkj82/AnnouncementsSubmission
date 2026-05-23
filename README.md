@@ -28,4 +28,6 @@ Teachers do not need pre-created user records. A Google account ending in `@dora
 
 Studio crew and admins can use Teleprompter Mode to display the finalized daily rundown script. It reads from `rundowns/{date}` and, when present, matching `rundownItems` documents.
 
+Each daily rundown also includes a Studio Checklist stored on `rundowns/{date}.checklistItems` for live setup tracking across studio devices.
+
 Teachers only paste Google Drive links; the app does not upload video files.

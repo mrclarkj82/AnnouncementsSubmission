@@ -248,6 +248,11 @@ service cloud.firestore {
       allow update: if isAdmin()
         && validRundownStatus(request.resource.data.status);
       allow update: if isStudioCrew()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "checklistItems",
+          "updatedAt"
+        ]);
+      allow update: if isStudioCrew()
         && resource.data.locked == false
         && request.resource.data.locked == resource.data.locked
         && validRundownStatus(request.resource.data.status);
