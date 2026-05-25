@@ -1868,6 +1868,19 @@ function UserManagement({ profile, users, loading, error, setToast }) {
   const [form, setForm] = useState({ email: "", role: VIDEO_ROLES.STUDENT });
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
+  const requiredAdmins = REQUIRED_VIDEO_ADMIN_EMAILS.map((email) => ({
+    id: `required-${email}`,
+    email,
+    role: VIDEO_ROLES.ADMIN,
+    active: true,
+    required: true,
+  }));
+  const visibleUsers = [
+    ...requiredAdmins,
+    ...users.filter(
+      (user) => !requiredAdmins.some((requiredAdmin) => requiredAdmin.email === user.email),
+    ),
+  ];
 
   const updateForm = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1958,16 +1971,22 @@ function UserManagement({ profile, users, loading, error, setToast }) {
         ? html`<${EmptyState} icon=${Users} title="Loading users" />`
         : html`
             <div className="grid gap-3">
-              ${users.map(
+              ${visibleUsers.map(
                 (user) => html`
                   <article key=${user.email} className="vp-panel flex flex-col gap-3 rounded-2xl p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="font-black text-white">${user.email}</p>
-                      <p className="text-sm text-slate-400">${roleLabel(user.role)} - ${user.active ? "active" : "disabled"}</p>
+                      <p className="text-sm text-slate-400">
+                        ${roleLabel(user.role)} - ${user.required ? "built in" : user.active ? "active" : "disabled"}
+                      </p>
                     </div>
-                    <${Button} variant=${user.active ? "danger" : "success"} onClick=${() => toggleUser(user)}>
-                      ${user.active ? "Disable" : "Enable"}
-                    </${Button}>
+                    ${user.required
+                      ? html`<${Badge} icon=${ShieldCheck}>Built in</${Badge}>`
+                      : html`
+                          <${Button} variant=${user.active ? "danger" : "success"} onClick=${() => toggleUser(user)}>
+                            ${user.active ? "Disable" : "Enable"}
+                          </${Button}>
+                        `}
                   </article>
                 `,
               )}
