@@ -902,7 +902,7 @@ function ProjectMonitorCard({ project, profileByEmail, interestIndex }) {
   `;
 }
 
-function ProjectManager({ profile, projects, loading, error, setToast }) {
+function ProjectManager({ profile, projects, loading, error, setToast, onPreviewStudent }) {
   return html`
     <section className="space-y-5">
       <div>
@@ -922,7 +922,13 @@ function ProjectManager({ profile, projects, loading, error, setToast }) {
             <div className="grid gap-4 lg:grid-cols-2">
               ${projects.map(
                 (project) => html`
-                  <${ProjectAdminCard} key=${project.id} profile=${profile} project=${project} setToast=${setToast} />
+                  <${ProjectAdminCard}
+                    key=${project.id}
+                    profile=${profile}
+                    project=${project}
+                    setToast=${setToast}
+                    onPreviewStudent=${onPreviewStudent}
+                  />
                 `,
               )}
             </div>
@@ -1075,7 +1081,7 @@ function ProjectCreateForm({ profile, setToast }) {
   `;
 }
 
-function ProjectAdminCard({ profile, project, setToast }) {
+function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
   const progress = projectProgress(project);
   const [busy, setBusy] = useState(false);
 
@@ -1110,6 +1116,18 @@ function ProjectAdminCard({ profile, project, setToast }) {
         <div className="h-full rounded-full bg-lens" style=${{ width: `${progress.percent}%` }}></div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
+        ${isVideoAdmin(profile)
+          ? html`
+              <${Button}
+                icon=${Eye}
+                type="button"
+                variant="secondary"
+                onClick=${() => onPreviewStudent(project.id)}
+              >
+                Preview as Student
+              </${Button}>
+            `
+          : null}
         ${PROJECT_STATUSES.map(
           (status) => html`
             <${Button}
@@ -1192,7 +1210,33 @@ function StudentFilmingHome({ profile, projects, loading, error, setToast, setKi
   `;
 }
 
-function FilmingWorkspace({ profile, project, setToast, setKioskActive }) {
+function AdminStudentPreview({ profile, project, setToast, setKioskActive, onClose }) {
+  return html`
+    <section className="space-y-4">
+      <div className="vp-panel rounded-3xl border border-warning/35 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-warning">Admin Student Preview</p>
+            <h1 className="mt-1 text-2xl font-black text-white">Previewing ${project.title}</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+              You are still signed in as an admin. This preview uses admin permissions so you can test the student workflow without a real student account.
+            </p>
+          </div>
+          <${Button} icon=${X} variant="ghost" onClick=${onClose}>Exit preview</${Button}>
+        </div>
+      </div>
+      <${FilmingWorkspace}
+        profile=${profile}
+        project=${project}
+        setToast=${setToast}
+        setKioskActive=${setKioskActive}
+        previewMode=${true}
+      />
+    </section>
+  `;
+}
+
+function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewMode = false }) {
   const [filmingMode, setFilmingMode] = useState(false);
   const [focusWarning, setFocusWarning] = useState(false);
   const [readMode, setReadMode] = useState(false);
@@ -1321,6 +1365,21 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive }) {
 
   return html`
     <div className=${classNames(filmingMode ? "fixed inset-0 z-50 overflow-y-auto vp-kiosk px-3 py-3 sm:px-5" : "space-y-4")}>
+      ${previewMode
+        ? html`
+            <div className="rounded-3xl border border-warning/35 bg-warning/10 p-4 text-sm leading-6 text-amber-100">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-black text-white">Admin preview mode</p>
+                  <p>
+                    Student pages are being shown for testing while writes are still saved under your admin account.
+                  </p>
+                </div>
+                <${Badge} icon=${Eye} className="text-amber-100">Preview</${Badge}>
+              </div>
+            </div>
+          `
+        : null}
       <section className="vp-panel rounded-3xl p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -1921,6 +1980,7 @@ function UserManagement({ profile, users, loading, error, setToast }) {
 function VideoProductionApp() {
   const { user, profile, loading, error } = useVideoAuthProfile();
   const [view, setView] = useState("");
+  const [previewProjectId, setPreviewProjectId] = useState("");
   const [toast, setToast] = useState("");
   const [kioskActive, setKioskActive] = useState(false);
   const { projects, loading: projectsLoading, error: projectsError } = useVideoProjects(profile);
@@ -1939,14 +1999,35 @@ function VideoProductionApp() {
     if (profile?.role) setView(defaultViewForProfile(profile));
   }, [profile?.email, profile?.role]);
 
+  useEffect(() => {
+    if (!isVideoAdmin(profile)) setPreviewProjectId("");
+  }, [profile?.role]);
+
   if (loading) return html`<${LoadingScreen} />`;
   if (!user) return html`<${VideoLogin} error=${error} />`;
   if (!hasVideoAccess(profile)) return html`<${AccessDeniedScreen} profile=${profile} error=${error} />`;
 
   const activeView = view || defaultViewForProfile(profile);
+  const previewProject = isVideoAdmin(profile)
+    ? projects.find((project) => project.id === previewProjectId)
+    : null;
+  const selectView = (nextView) => {
+    setPreviewProjectId("");
+    setView(nextView);
+  };
   let content = null;
 
-  if (activeView === "filming" && isVideoStudent(profile)) {
+  if (previewProject) {
+    content = html`
+      <${AdminStudentPreview}
+        profile=${profile}
+        project=${previewProject}
+        setToast=${setToast}
+        setKioskActive=${setKioskActive}
+        onClose=${() => setPreviewProjectId("")}
+      />
+    `;
+  } else if (activeView === "filming" && isVideoStudent(profile)) {
     content = html`
       <${StudentFilmingHome}
         profile=${profile}
@@ -1976,6 +2057,10 @@ function VideoProductionApp() {
         loading=${projectsLoading}
         error=${projectsError}
         setToast=${setToast}
+        onPreviewStudent=${(projectId) => {
+          setPreviewProjectId(projectId);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
       />
     `;
   } else if (activeView === "users" && isVideoAdmin(profile)) {
@@ -2002,7 +2087,7 @@ function VideoProductionApp() {
     <${VideoShell}
       profile=${profile}
       view=${activeView}
-      setView=${setView}
+      setView=${selectView}
       kioskActive=${kioskActive}
     >
       ${content}
