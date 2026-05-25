@@ -1810,6 +1810,10 @@ function UserManagement({ profile, users, loading, error, setToast }) {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
 
+  const updateForm = (field, value) => {
+    setForm((current) => ({ ...current, [field]: value }));
+  };
+
   const saveUser = async (event) => {
     event.preventDefault();
     setFormError("");
@@ -1874,12 +1878,12 @@ function UserManagement({ profile, users, loading, error, setToast }) {
         <div className="grid gap-3 md:grid-cols-[1fr_220px_auto]">
           <${TextInput}
             value=${form.email}
-            onInput=${(event) => setForm((current) => ({ ...current, email: event.currentTarget.value }))}
+            onInput=${(event) => updateForm("email", event.currentTarget.value)}
             placeholder="student@student.doralacademynv.org"
           />
           <${Select}
             value=${form.role}
-            onChange=${(event) => setForm((current) => ({ ...current, role: event.currentTarget.value }))}
+            onChange=${(event) => updateForm("role", event.currentTarget.value)}
           >
             <option value=${VIDEO_ROLES.STUDENT}>Student</option>
             <option value=${VIDEO_ROLES.TEACHER}>Teacher</option>
