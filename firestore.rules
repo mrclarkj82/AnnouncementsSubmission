@@ -98,7 +98,6 @@ service cloud.firestore {
         "Submitted",
         "Approved",
         "Needs Revision",
-        "Ready for Broadcast",
         "Aired",
         "Skipped",
         "Archived",

@@ -30,4 +30,6 @@ Studio crew and admins can use Teleprompter Mode to display the finalized daily 
 
 Each daily rundown also includes a Studio Checklist stored on `rundowns/{date}.checklistItems` for live setup tracking across studio devices.
 
+When Studio marks an announcement `Approved`, it is automatically added to each matching daily rundown. There is no separate approval step.
+
 Teachers only paste Google Drive links; the app does not upload video files.

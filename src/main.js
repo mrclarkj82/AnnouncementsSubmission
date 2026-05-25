@@ -83,7 +83,6 @@ const ANNOUNCEMENT_STATUSES = [
   "Submitted",
   "Approved",
   "Needs Revision",
-  "Ready for Broadcast",
   "Aired",
   "Skipped",
   "Archived",
@@ -93,12 +92,11 @@ const ITEM_STATUSES = [
   "Submitted",
   "Approved",
   "Needs Revision",
-  "Ready for Broadcast",
   "Aired",
   "Skipped",
   "Archived",
 ];
-const PROMPTER_ITEM_STATUSES = ["Approved", "Ready for Broadcast"];
+const PROMPTER_ITEM_STATUSES = ["Approved"];
 const DEFAULT_STUDIO_CHECKLIST_LABELS = [
   "Mic check completed",
   "Camera batteries checked",
@@ -140,7 +138,6 @@ const STATUS_STYLE = {
   Submitted: "bg-sky-500/15 text-sky-200 ring-sky-400/25",
   Approved: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/25",
   "Needs Revision": "bg-amber-500/15 text-amber-200 ring-amber-400/25",
-  "Ready for Broadcast": "bg-violet-500/15 text-violet-200 ring-violet-400/25",
   Aired: "bg-teal-500/15 text-teal-200 ring-teal-400/25",
   Skipped: "bg-slate-500/15 text-slate-200 ring-slate-400/25",
   Archived: "bg-zinc-500/15 text-zinc-200 ring-zinc-400/25",
@@ -175,6 +172,11 @@ function timestampLabel(value) {
   });
 }
 
+function normalizeProductionStatus(status) {
+  const value = safeText(status);
+  return value === "Ready for Broadcast" ? "Approved" : value;
+}
+
 function announcementEndDate(announcement) {
   return safeText(announcement.expirationDate) || safeText(announcement.requestedAirDate);
 }
@@ -192,6 +194,34 @@ function dateRangeLabel(announcement) {
   if (!start) return "No air date";
   if (!end || end === start) return toDateLabel(start);
   return `${toDateLabel(start)} to ${toDateLabel(end)}`;
+}
+
+function parseISODate(value) {
+  const [year, month, day] = safeText(value).split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function toISODate(date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function announcementRunDates(announcement) {
+  const start = parseISODate(announcement?.requestedAirDate);
+  const end = parseISODate(announcementEndDate(announcement));
+  if (!start) return [];
+  const last = end && end >= start ? end : start;
+  const dates = [];
+  const cursor = new Date(start);
+  for (let guard = 0; cursor <= last && guard < 45; guard += 1) {
+    dates.push(toISODate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
 }
 
 function normalizeEmail(email) {
@@ -278,8 +308,93 @@ function buildAnnouncementScript(announcement) {
   return `${announcement.title}\n\n${announcement.text}${videoCue}`.trim();
 }
 
+function rundownItemFromAnnouncement(announcement, existingItem, order) {
+  return {
+    itemId: existingItem?.itemId || `${announcement.id}-${Date.now()}`,
+    announcementId: announcement.id,
+    title: announcement.title,
+    scriptText: buildAnnouncementScript(announcement),
+    driveVideoLink: announcement.driveVideoLink || "",
+    category: announcement.category,
+    section: existingItem?.section || sectionForAnnouncement(announcement),
+    order,
+    status: "Approved",
+    productionNotes: existingItem?.productionNotes || announcement.studioNotes || "",
+  };
+}
+
+async function syncApprovedAnnouncementToRundowns(announcement, profile) {
+  const runDates = announcementRunDates(announcement);
+  if (!runDates.length) throw new Error("Approved announcements need a valid air date.");
+
+  for (const date of runDates) {
+    const rundownRef = doc(db, "rundowns", date);
+    const rundownSnapshot = await getDoc(rundownRef);
+    const rundown = rundownSnapshot.exists() ? rundownSnapshot.data() : null;
+
+    if (rundown?.locked && !hasAdminAccess(profile)) {
+      throw new Error(`${toDateLabel(date)} is locked. Ask an admin to update that rundown.`);
+    }
+
+    const currentItems = normalizeOrders(rundown?.items || []);
+    const existingIndex = currentItems.findIndex((item) => item.announcementId === announcement.id);
+    const nextItems =
+      existingIndex >= 0
+        ? currentItems.map((item, index) =>
+            index === existingIndex ? rundownItemFromAnnouncement(announcement, item, item.order) : item,
+          )
+        : [
+            ...currentItems,
+            rundownItemFromAnnouncement(announcement, null, currentItems.length + 1),
+          ];
+
+    await setDoc(
+      rundownRef,
+      {
+        rundownId: date,
+        date,
+        status: rundown?.status || "Draft",
+        locked: rundown?.locked || false,
+        items: normalizeOrders(nextItems),
+        createdBy: rundown?.createdBy || profile.uid,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+}
+
+async function removeAnnouncementFromRundowns(announcement, profile) {
+  const runDates = announcementRunDates(announcement);
+
+  for (const date of runDates) {
+    const rundownRef = doc(db, "rundowns", date);
+    const rundownSnapshot = await getDoc(rundownRef);
+    if (!rundownSnapshot.exists()) continue;
+    const rundown = rundownSnapshot.data();
+
+    if (rundown.locked && !hasAdminAccess(profile)) continue;
+
+    const nextItems = normalizeOrders(rundown.items || []).filter(
+      (item) => item.announcementId !== announcement.id,
+    );
+    await setDoc(
+      rundownRef,
+      {
+        items: nextItems,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+}
+
 function normalizeOrders(items) {
-  return items.map((item, index) => ({ ...item, order: index + 1 }));
+  return items.map((item, index) => ({
+    ...item,
+    status: normalizeProductionStatus(item.status),
+    order: index + 1,
+  }));
 }
 
 function normalizeChecklistItems(items) {
@@ -378,14 +493,15 @@ function IconBadge({ icon: Icon, children, className = "" }) {
 }
 
 function StatusBadge({ status }) {
+  const label = normalizeProductionStatus(status);
   return html`
     <span
       className=${classNames(
         "inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold ring-1",
-        STATUS_STYLE[status] || "bg-slate-500/15 text-slate-200 ring-slate-400/25",
+        STATUS_STYLE[label] || "bg-slate-500/15 text-slate-200 ring-slate-400/25",
       )}
     >
-      ${status || "Unknown"}
+      ${label || "Unknown"}
     </span>
   `;
 }
@@ -579,7 +695,10 @@ function useAnnouncements(profile) {
       request,
       (snapshot) => {
         const nextAnnouncements = snapshot.docs
-          .map((item) => ({ id: item.id, ...item.data() }))
+          .map((item) => {
+            const data = item.data();
+            return { id: item.id, ...data, status: normalizeProductionStatus(data.status) };
+          })
           .sort(sortByUpdated);
         setAnnouncements(nextAnnouncements);
         setLoading(false);
@@ -1175,11 +1294,21 @@ function StudioDashboard({ profile, setToast }) {
   });
 
   const updateStatus = async (announcement, status) => {
-    await updateDoc(doc(db, "announcements", announcement.id), {
-      status,
-      updatedAt: serverTimestamp(),
-    });
-    setToast(`${announcement.title} marked ${status}`);
+    try {
+      await updateDoc(doc(db, "announcements", announcement.id), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
+      if (status === "Approved") {
+        await syncApprovedAnnouncementToRundowns({ ...announcement, status }, profile);
+        setToast(`${announcement.title} approved and added to rundown`);
+      } else {
+        await removeAnnouncementFromRundowns(announcement, profile);
+        setToast(`${announcement.title} marked ${status}`);
+      }
+    } catch (statusError) {
+      setToast(statusError.message);
+    }
   };
 
   const statusCounts = ANNOUNCEMENT_STATUSES.map((status) => ({
@@ -1251,6 +1380,7 @@ function StudioDashboard({ profile, setToast }) {
                     <${AnnouncementCard}
                       key=${announcement.id}
                       announcement=${announcement}
+                      profile=${profile}
                       updateStatus=${updateStatus}
                       setToast=${setToast}
                     />
@@ -1285,7 +1415,7 @@ function StudioDashboard({ profile, setToast }) {
                           <td className="px-4 py-4 text-slate-300">${announcement.submittedByName}</td>
                           <td className="px-4 py-4"><${StatusBadge} status=${announcement.status} /></td>
                           <td className="w-72 px-4 py-4">
-                            <${ProductionNotes} announcement=${announcement} setToast=${setToast} />
+                            <${ProductionNotes} announcement=${announcement} profile=${profile} setToast=${setToast} />
                           </td>
                           <td className="px-4 py-4">
                             <${AnnouncementActions}
@@ -1314,7 +1444,7 @@ function FilterSelect({ value, placeholder, options, onChange }) {
   `;
 }
 
-function AnnouncementCard({ announcement, updateStatus, setToast }) {
+function AnnouncementCard({ announcement, profile, updateStatus, setToast }) {
   return html`
     <article className="glass-panel rounded-xl p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1332,7 +1462,7 @@ function AnnouncementCard({ announcement, updateStatus, setToast }) {
         <${IconBadge}>${announcement.priority}</${IconBadge}>
       </div>
       <div className="mt-4">
-        <${ProductionNotes} announcement=${announcement} setToast=${setToast} />
+        <${ProductionNotes} announcement=${announcement} profile=${profile} setToast=${setToast} />
       </div>
       <div className="mt-4">
         <${AnnouncementActions}
@@ -1345,17 +1475,28 @@ function AnnouncementCard({ announcement, updateStatus, setToast }) {
   `;
 }
 
-function ProductionNotes({ announcement, setToast }) {
+function ProductionNotes({ announcement, profile, setToast }) {
   const [draft, setDraft] = useState(announcement.studioNotes || "");
 
   useEffect(() => setDraft(announcement.studioNotes || ""), [announcement.id, announcement.studioNotes]);
 
   const save = async () => {
-    await updateDoc(doc(db, "announcements", announcement.id), {
-      studioNotes: draft,
-      updatedAt: serverTimestamp(),
-    });
-    setToast("Production note saved");
+    try {
+      await updateDoc(doc(db, "announcements", announcement.id), {
+        studioNotes: draft,
+        ...(announcement.status === "Approved" ? { status: "Approved" } : {}),
+        updatedAt: serverTimestamp(),
+      });
+      if (announcement.status === "Approved" && profile) {
+        await syncApprovedAnnouncementToRundowns(
+          { ...announcement, studioNotes: draft, status: "Approved" },
+          profile,
+        );
+      }
+      setToast("Production note saved");
+    } catch (noteError) {
+      setToast(noteError.message);
+    }
   };
 
   return html`
@@ -1375,7 +1516,6 @@ function AnnouncementActions({ announcement, updateStatus, setToast }) {
   return html`
     <div className="flex flex-wrap gap-2">
       <${Button} icon=${Check} variant="success" onClick=${() => updateStatus(announcement, "Approved")}>Approve</${Button}>
-      <${Button} icon=${Sparkles} variant="secondary" onClick=${() => updateStatus(announcement, "Ready for Broadcast")}>Ready</${Button}>
       <${Button} icon=${RefreshCcw} variant="warn" onClick=${() => updateStatus(announcement, "Needs Revision")}>Revise</${Button}>
       <${Button} icon=${X} variant="danger" onClick=${() => updateStatus(announcement, "Rejected")}>Reject</${Button}>
       <${Button} icon=${Archive} variant="ghost" onClick=${() => updateStatus(announcement, "Archived")}>Archive</${Button}>
@@ -1407,19 +1547,9 @@ function RundownBuilder({ profile, setToast }) {
   const [date, setDate] = useState(todayISO());
   const [custom, setCustom] = useState({ title: "", scriptText: "", section: "Main Announcements" });
   const [dragging, setDragging] = useState(null);
-  const { announcements } = useAnnouncements(profile);
   const { rundown, loading, error } = useRundown(date);
   const locked = Boolean(rundown?.locked);
   const items = useMemo(() => normalizeOrders(rundown?.items || []), [rundown?.items]);
-  const approvedForDate = announcements.filter(
-    (item) =>
-      !item.deletedAt &&
-      announcementRunsOnDate(item, date) &&
-      ["Approved", "Ready for Broadcast"].includes(item.status),
-  );
-  const missingApproved = approvedForDate.filter(
-    (announcement) => !items.some((item) => item.announcementId === announcement.id),
-  );
 
   const rundownRef = doc(db, "rundowns", date);
 
@@ -1442,23 +1572,6 @@ function RundownBuilder({ profile, setToast }) {
       },
       { merge: true },
     );
-  };
-
-  const importApproved = async () => {
-    const newItems = missingApproved.map((announcement, index) => ({
-      itemId: `${announcement.id}-${Date.now()}-${index}`,
-      announcementId: announcement.id,
-      title: announcement.title,
-      scriptText: buildAnnouncementScript(announcement),
-      driveVideoLink: announcement.driveVideoLink || "",
-      category: announcement.category,
-      section: sectionForAnnouncement(announcement),
-      order: items.length + index + 1,
-      status: announcement.status,
-      productionNotes: announcement.studioNotes || "",
-    }));
-    await saveRundown([...items, ...newItems]);
-    setToast(`${newItems.length} approved item${newItems.length === 1 ? "" : "s"} added`);
   };
 
   const addCustom = async (event) => {
@@ -1572,19 +1685,16 @@ function RundownBuilder({ profile, setToast }) {
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <div className="space-y-4">
           <div className="glass-panel rounded-xl p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="font-black text-white">Approved for this date</h3>
-                <p className="text-sm text-slate-400">${missingApproved.length} not in rundown</p>
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/25">
+                <${Check} size=${18} />
               </div>
-              <${Button}
-                icon=${Plus}
-                variant="primary"
-                disabled=${locked || missingApproved.length === 0}
-                onClick=${importApproved}
-              >
-                Add approved
-              </${Button}>
+              <div className="min-w-0">
+                <h3 className="font-black text-white">Approved announcements sync automatically</h3>
+                <p className="text-sm text-slate-400">
+                  Mark an item Approved in Studio and it appears here without another approval step.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -2136,7 +2246,7 @@ function teleprompterSourceItems(rundown, rundownItems) {
         title: safeText(item.title) || `Segment ${index + 1}`,
         scriptText: safeText(item.scriptText || item.text || item.script),
         section: safeText(item.section) || "Main Announcements",
-        status: item.status || "Submitted",
+        status: normalizeProductionStatus(item.status) || "Submitted",
         order: Number(item.order) || index + 1,
       }))
       .filter((item) => PROMPTER_ITEM_STATUSES.includes(item.status))
@@ -2383,7 +2493,7 @@ function TeleprompterMode({ profile }) {
                   : !finalRundown
                     ? html`<div className="pt-24 text-center text-3xl font-black">Rundown is not finalized yet.</div>`
                     : !hasScript
-                      ? html`<div className="pt-24 text-center text-3xl font-black">No approved or ready anchor items.</div>`
+                      ? html`<div className="pt-24 text-center text-3xl font-black">No approved anchor items.</div>`
                       : html`
                           <article
                             className=${classNames("pb-[45vh]", lightMode ? "text-slate-950" : "text-white")}
