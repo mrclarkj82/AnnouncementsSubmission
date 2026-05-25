@@ -33,3 +33,5 @@ Each daily rundown also includes a Studio Checklist stored on `rundowns/{date}.c
 When Studio marks an announcement `Approved`, it is automatically added to each matching daily rundown. There is no separate approval step.
 
 Teachers only paste Google Drive links; the app does not upload video files.
+
+Video Production Studio is a separate direct-entry app at `video-production.html`. It is intentionally not linked from Broadcast Desk, and Broadcast Desk is not linked from Video Production Studio.

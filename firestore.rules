@@ -81,12 +81,62 @@ service cloud.firestore {
       return isStaff() || role() == "teacher";
     }
 
+    function videoUserPath(userEmail) {
+      return /databases/$(database)/documents/videoUsers/$(userEmail);
+    }
+
+    function hasVideoAssignedRole(roleValue) {
+      return isAllowedDoralEmail()
+        && exists(videoUserPath(signedInEmail()))
+        && get(videoUserPath(signedInEmail())).data.email == signedInEmail()
+        && get(videoUserPath(signedInEmail())).data.active == true
+        && get(videoUserPath(signedInEmail())).data.role == roleValue;
+    }
+
+    function videoRole() {
+      return isRequiredAdmin() || hasVideoAssignedRole("admin")
+        ? "admin"
+        : (
+          hasVideoAssignedRole("teacher")
+            ? "teacher"
+            : (
+              hasVideoAssignedRole("student")
+                ? "student"
+                : (
+                  isTeacherEmail()
+                    ? "teacher"
+                    : (isStudentEmail() ? "student" : "accessDenied")
+                )
+            )
+        );
+    }
+
+    function isVideoAdmin() {
+      return videoRole() == "admin";
+    }
+
+    function isVideoTeacher() {
+      return videoRole() == "teacher";
+    }
+
+    function isVideoStudent() {
+      return videoRole() == "student";
+    }
+
+    function hasVideoAccess() {
+      return isVideoAdmin() || isVideoTeacher() || isVideoStudent();
+    }
+
     function canSubmitAnnouncements() {
       return isTeacherEmail();
     }
 
     function validAssignedRole(value) {
       return value in ["admin", "studioCrew"];
+    }
+
+    function validVideoRole(value) {
+      return value in ["admin", "teacher", "student"];
     }
 
     function validAnnouncementRole(value) {
@@ -109,6 +159,10 @@ service cloud.firestore {
       return value in ["Draft", "Finalized", "Archived"];
     }
 
+    function validVideoProjectStatus(value) {
+      return value in ["active", "paused", "complete", "archived"];
+    }
+
     function validAuthorizedUser(userEmail) {
       return request.resource.data.keys().hasOnly([
           "email",
@@ -125,8 +179,57 @@ service cloud.firestore {
         && request.resource.data.createdBy is string;
     }
 
+    function validVideoUser(userEmail) {
+      return request.resource.data.keys().hasOnly([
+          "email",
+          "role",
+          "active",
+          "createdAt",
+          "createdBy",
+          "updatedAt"
+        ])
+        && request.resource.data.email == userEmail
+        && validDoralEmail(request.resource.data.email)
+        && validVideoRole(request.resource.data.role)
+        && request.resource.data.active is bool
+        && request.resource.data.createdBy is string;
+    }
+
     function ownsAnnouncement() {
       return isTeacherEmail() && resource.data.submittedByEmail == signedInEmail();
+    }
+
+    function videoProjectPath(projectId) {
+      return /databases/$(database)/documents/videoProjects/$(projectId);
+    }
+
+    function isAssignedVideoTeacher(projectData) {
+      return isVideoTeacher()
+        && projectData.assignedTeacherEmail == signedInEmail();
+    }
+
+    function isAssignedVideoStudent(projectData) {
+      return isVideoStudent()
+        && projectData.assignedStudentEmails is list
+        && signedInEmail() in projectData.assignedStudentEmails;
+    }
+
+    function canReadVideoProject(projectData) {
+      return isVideoAdmin()
+        || isAssignedVideoTeacher(projectData)
+        || isAssignedVideoStudent(projectData);
+    }
+
+    function canReadVideoProjectId(projectId) {
+      return exists(videoProjectPath(projectId))
+        && canReadVideoProject(get(videoProjectPath(projectId)).data);
+    }
+
+    function validVideoProjectBase() {
+      return request.resource.data.assignedTeacherEmail is string
+        && request.resource.data.assignedTeacherEmail.matches('^[^@]+@doralacademynv\\.org$')
+        && request.resource.data.assignedStudentEmails is list
+        && validVideoProjectStatus(request.resource.data.status);
     }
 
     match /authorizedUsers/{userEmail} {
@@ -261,6 +364,85 @@ service cloud.firestore {
     match /rundownItems/{rundownItemId} {
       allow get, list: if isStaff();
       allow create, update, delete: if isAdmin();
+    }
+
+    match /videoUsers/{userEmail} {
+      allow get: if isVideoAdmin()
+        || (isAllowedDoralEmail() && userEmail == signedInEmail());
+      allow list: if isVideoAdmin();
+      allow create: if isVideoAdmin()
+        && validVideoUser(userEmail)
+        && request.resource.data.createdBy == signedInEmail();
+      allow update: if isVideoAdmin()
+        && validVideoUser(userEmail)
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "role",
+          "active",
+          "updatedAt"
+        ]);
+      allow delete: if isVideoAdmin();
+    }
+
+    match /videoProjects/{projectId} {
+      allow get, list: if canReadVideoProject(resource.data);
+      allow create: if isVideoAdmin()
+        && validVideoProjectBase();
+      allow create: if isVideoTeacher()
+        && validVideoProjectBase()
+        && request.resource.data.assignedTeacherEmail == signedInEmail();
+      allow update: if isVideoAdmin()
+        && validVideoProjectBase();
+      allow update: if isAssignedVideoTeacher(resource.data)
+        && validVideoProjectBase()
+        && request.resource.data.assignedTeacherEmail == resource.data.assignedTeacherEmail;
+      allow update: if isAssignedVideoStudent(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "checklistItems",
+          "scriptSections",
+          "shotList",
+          "filmingStatus",
+          "currentTask",
+          "updatedAt",
+          "lastActivityAt",
+          "lastActivityBy"
+        ]);
+      allow delete: if isVideoAdmin();
+    }
+
+    match /videoStudentProfiles/{studentEmail} {
+      allow get: if isVideoAdmin()
+        || isVideoTeacher()
+        || (isVideoStudent() && studentEmail == signedInEmail());
+      allow list: if isVideoAdmin() || isVideoTeacher();
+      allow create, update: if isVideoStudent()
+        && studentEmail == signedInEmail()
+        && request.resource.data.email == signedInEmail()
+        && request.resource.data.keys().hasOnly([
+          "email",
+          "displayName",
+          "favoriteMovies",
+          "favoriteGames",
+          "favoriteMusic",
+          "careerGoals",
+          "hobbies",
+          "favoriteCreators",
+          "favoriteSports",
+          "productionInterests",
+          "updatedAt"
+        ]);
+      allow delete: if isVideoAdmin();
+    }
+
+    match /videoActivityLogs/{logId} {
+      allow get, list: if isVideoAdmin() || isVideoTeacher();
+      allow create: if hasVideoAccess()
+        && request.resource.data.projectId is string
+        && canReadVideoProjectId(request.resource.data.projectId)
+        && request.resource.data.userEmail == signedInEmail();
+      allow update, delete: if isVideoAdmin();
     }
 
     match /categories/{categoryId} {

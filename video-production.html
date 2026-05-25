@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Video Production Studio for live student filming workflows and teacher monitoring."
+    />
+    <title>Video Production Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              coal: "#05070d",
+              slatepanel: "#0d1320",
+              deck: "#111827",
+              signal: "#22c55e",
+              warning: "#f59e0b",
+              alert: "#ef4444",
+              lens: "#38bdf8",
+              violetline: "#8b5cf6",
+            },
+            boxShadow: {
+              monitor:
+                "0 0 0 1px rgba(56, 189, 248, 0.16), 0 26px 84px rgba(0, 0, 0, 0.5)",
+            },
+          },
+        },
+      };
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "htm/react": "https://esm.sh/htm@3.1.1/react?deps=react@18.3.1",
+          "lucide-react": "https://esm.sh/lucide-react@0.468.0?deps=react@18.3.1",
+          "firebase/app": "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js",
+          "firebase/auth": "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js",
+          "firebase/firestore": "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="./src/video-production.css?v=20260525-video-studio" />
+  </head>
+  <body>
+    <div id="video-production-root"></div>
+    <script type="module" src="./src/video-production.js?v=20260525-video-studio"></script>
+  </body>
+</html>
