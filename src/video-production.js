@@ -4,6 +4,7 @@ import { html } from "htm/react";
 import {
   Activity,
   AlertTriangle,
+  Archive,
   BookOpen,
   Camera,
   Check,
@@ -11,6 +12,7 @@ import {
   Circle,
   ClipboardCheck,
   Clock,
+  Copy,
   Eye,
   FileText,
   Gauge,
@@ -27,6 +29,7 @@ import {
   Play,
   Plus,
   Radio,
+  RefreshCcw,
   Save,
   ShieldCheck,
   Sparkles,
@@ -121,6 +124,7 @@ const CURRENT_TASKS = [
   "Footage review",
   "Upload",
 ];
+const PERIOD_SESSION_KEY = "videoStudio.selectedMonitorPeriodId";
 
 function classNames(...values) {
   return values.filter(Boolean).join(" ");
@@ -202,6 +206,50 @@ function titleFromEmail(email) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function normalizeJoinCode(code) {
+  return safeText(code).toUpperCase().replace(/\s+/g, "");
+}
+
+function joinCodeLowercase(code) {
+  return normalizeJoinCode(code).toLowerCase();
+}
+
+function joinCodePrefix(periodName, courseName) {
+  const source = safeText(courseName) || safeText(periodName) || "CLASS";
+  const compact = source
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s-]/g, "")
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? `P${part}` : part.slice(0, 3)))
+    .join("");
+  return (compact || "CLASS").slice(0, 8);
+}
+
+function generateJoinCodeCandidate(periodName, courseName) {
+  const prefix = joinCodePrefix(periodName, courseName);
+  const suffix = Math.floor(1000 + Math.random() * 9000);
+  return `${prefix}-${suffix}`;
+}
+
+async function createUniqueJoinCode(periodName, courseName) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const joinCode = generateJoinCodeCandidate(periodName, courseName);
+    const codeSnapshot = await getDoc(doc(db, "periodJoinCodes", joinCodeLowercase(joinCode)));
+    if (!codeSnapshot.exists()) return joinCode;
+  }
+  throw new Error("Could not generate a unique period code. Try again.");
+}
+
+async function copyText(value, label, setToast) {
+  try {
+    await navigator.clipboard.writeText(value);
+    setToast(`${label} copied`);
+  } catch {
+    setToast(`Copy failed. Code: ${value}`);
+  }
 }
 
 function roleLabel(role) {
@@ -303,6 +351,9 @@ function normalizeShots(shots) {
 function cleanProject(project) {
   return {
     ...project,
+    periodId: safeText(project?.periodId),
+    periodName: safeText(project?.periodName),
+    courseName: safeText(project?.courseName),
     checklistItems: normalizeChecklist(project?.checklistItems || []),
     scriptSections: normalizeScriptSections(project?.scriptSections || []),
     shotList: normalizeShots(project?.shotList || []),
@@ -406,10 +457,130 @@ function useVideoAuthProfile() {
   return { user, profile, loading, error };
 }
 
-function useVideoProjects(profile) {
+function cleanPeriod(period) {
+  return {
+    ...period,
+    periodName: safeText(period?.periodName) || "Untitled Period",
+    courseName: safeText(period?.courseName),
+    joinCode: normalizeJoinCode(period?.joinCode),
+    joinCodeLowercase: joinCodeLowercase(period?.joinCode || period?.joinCodeLowercase),
+    active: period?.active !== false,
+    archived: Boolean(period?.archived),
+  };
+}
+
+function usePeriods(profile) {
+  const [periods, setPeriods] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isVideoAdmin(profile) && !isVideoTeacher(profile)) {
+      setPeriods([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    setLoading(true);
+    const periodsRef = collection(db, "periods");
+    const request = isVideoAdmin(profile)
+      ? periodsRef
+      : query(periodsRef, where("teacherId", "==", profile.uid));
+
+    const unsubscribe = onSnapshot(
+      request,
+      (snapshot) => {
+        setPeriods(
+          snapshot.docs
+            .map((item) => cleanPeriod({ id: item.id, ...item.data() }))
+            .sort((a, b) => {
+              const activeA = a.active && !a.archived ? 0 : 1;
+              const activeB = b.active && !b.archived ? 0 : 1;
+              return (
+                activeA - activeB ||
+                safeText(a.courseName).localeCompare(safeText(b.courseName)) ||
+                safeText(a.periodName).localeCompare(safeText(b.periodName))
+              );
+            }),
+        );
+        setError("");
+        setLoading(false);
+      },
+      (snapshotError) => {
+        setError(snapshotError.message);
+        setLoading(false);
+      },
+    );
+
+    return unsubscribe;
+  }, [profile?.email, profile?.role, profile?.uid]);
+
+  return { periods, loading, error };
+}
+
+function usePeriodEnrollments(profile) {
+  const [enrollments, setEnrollments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!hasVideoAccess(profile)) {
+      setEnrollments([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    setLoading(true);
+    const enrollmentsRef = collection(db, "periodEnrollments");
+    const request = isVideoAdmin(profile)
+      ? enrollmentsRef
+      : isVideoTeacher(profile)
+        ? query(enrollmentsRef, where("teacherId", "==", profile.uid))
+        : query(enrollmentsRef, where("studentId", "==", profile.uid));
+
+    const unsubscribe = onSnapshot(
+      request,
+      (snapshot) => {
+        setEnrollments(
+          snapshot.docs
+            .map((item) => ({ id: item.id, ...item.data() }))
+            .sort((a, b) =>
+              safeText(a.periodName).localeCompare(safeText(b.periodName)) ||
+              safeText(a.studentName).localeCompare(safeText(b.studentName)),
+            ),
+        );
+        setError("");
+        setLoading(false);
+      },
+      (snapshotError) => {
+        setError(snapshotError.message);
+        setLoading(false);
+      },
+    );
+
+    return unsubscribe;
+  }, [profile?.email, profile?.role, profile?.uid]);
+
+  return { enrollments, loading, error };
+}
+
+function useVideoProjects(profile, enrollments = []) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const studentPeriodIds = useMemo(
+    () => [
+      ...new Set(
+        enrollments
+          .filter((enrollment) => enrollment.active !== false)
+          .map((enrollment) => safeText(enrollment.periodId))
+          .filter(Boolean),
+      ),
+    ],
+    [enrollments],
+  );
 
   useEffect(() => {
     if (!hasVideoAccess(profile)) {
@@ -421,11 +592,49 @@ function useVideoProjects(profile) {
 
     setLoading(true);
     const projectsRef = collection(db, "videoProjects");
+
+    if (isVideoStudent(profile)) {
+      if (!studentPeriodIds.length) {
+        setProjects([]);
+        setLoading(false);
+        setError("");
+        return undefined;
+      }
+
+      const buckets = new Map();
+      const unsubscribes = studentPeriodIds.map((periodId) =>
+        onSnapshot(
+          query(projectsRef, where("periodId", "==", periodId)),
+          (snapshot) => {
+            buckets.set(
+              periodId,
+              snapshot.docs.map((item) => cleanProject({ id: item.id, ...item.data() })),
+            );
+            setProjects(
+              [...buckets.values()]
+                .flat()
+                .sort((a, b) => {
+                  const activeA = a.status === "active" ? 0 : 1;
+                  const activeB = b.status === "active" ? 0 : 1;
+                  return activeA - activeB || safeText(a.dueDate).localeCompare(safeText(b.dueDate));
+                }),
+            );
+            setError("");
+            setLoading(false);
+          },
+          (snapshotError) => {
+            setError(snapshotError.message);
+            setLoading(false);
+          },
+        ),
+      );
+
+      return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+    }
+
     const request = isVideoAdmin(profile)
       ? projectsRef
-      : isVideoTeacher(profile)
-        ? query(projectsRef, where("assignedTeacherEmail", "==", profile.email))
-        : query(projectsRef, where("assignedStudentEmails", "array-contains", profile.email));
+      : query(projectsRef, where("assignedTeacherEmail", "==", profile.email));
 
     const unsubscribe = onSnapshot(
       request,
@@ -449,7 +658,7 @@ function useVideoProjects(profile) {
     );
 
     return unsubscribe;
-  }, [profile?.email, profile?.role]);
+  }, [profile?.email, profile?.role, studentPeriodIds.join("|")]);
 
   return { projects, loading, error };
 }
@@ -729,6 +938,7 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
     { id: "filming", label: "Filming", icon: Camera, show: isVideoStudent(profile) },
     { id: "profile", label: "Profile", icon: UserCog, show: isVideoStudent(profile) },
     { id: "monitor", label: "Monitor", icon: Monitor, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
+    { id: "periods", label: "Periods", icon: LayoutGrid, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
     { id: "projects", label: "Projects", icon: ClipboardCheck, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
     { id: "users", label: "Users", icon: Users, show: isVideoAdmin(profile) },
   ].filter((item) => item.show);
@@ -793,9 +1003,25 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
   `;
 }
 
-function MonitorDashboard({ projects, loading, error, studentProfiles }) {
+function MonitorDashboard({
+  projects,
+  loading,
+  error,
+  studentProfiles,
+  periods,
+  enrollments,
+  selectedPeriodId,
+  setSelectedPeriodId,
+}) {
   const [interestIndex, setInterestIndex] = useState(0);
-  const activeProjects = projects.filter((project) => project.status !== "archived");
+  const activePeriods = periods.filter((period) => period.active && !period.archived);
+  const selectedPeriod = activePeriods.find((period) => period.id === selectedPeriodId);
+  const activeProjects = projects
+    .filter((project) => project.status !== "archived")
+    .filter((project) => !selectedPeriodId || project.periodId === selectedPeriodId);
+  const selectedEnrollments = enrollments.filter(
+    (enrollment) => enrollment.active !== false && enrollment.periodId === selectedPeriodId,
+  );
   const profileByEmail = useMemo(() => {
     const map = new Map();
     studentProfiles.forEach((profile) => map.set(normalizeEmail(profile.email || profile.id), profile));
@@ -819,16 +1045,47 @@ function MonitorDashboard({ projects, loading, error, studentProfiles }) {
         </div>
         <div className="flex flex-wrap gap-2">
           <${Badge} icon=${Activity}>${activeProjects.length} active sessions</${Badge}>
+          ${selectedPeriod ? html`<${Badge} icon=${LayoutGrid}>${selectedPeriod.periodName}</${Badge}>` : null}
           <${Badge} icon=${Clock}>Live Firestore updates</${Badge}>
         </div>
       </div>
 
       ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
 
+      <div className="vp-panel rounded-3xl p-4">
+        <label className="grid gap-2 text-sm font-bold text-slate-300 md:max-w-xl">
+          Select period to monitor
+          <${Select}
+            value=${selectedPeriodId}
+            onChange=${(event) => setSelectedPeriodId(event.currentTarget.value)}
+          >
+            <option value="">Select Period</option>
+            ${activePeriods.map(
+              (period) => html`
+                <option key=${period.id} value=${period.id}>
+                  ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
+                </option>
+              `,
+            )}
+          </${Select}>
+        </label>
+        ${selectedPeriod
+          ? html`
+              <p className="mt-3 text-sm text-slate-400">
+                Showing ${selectedEnrollments.length} enrolled student${selectedEnrollments.length === 1 ? "" : "s"}
+                and ${activeProjects.length} active project${activeProjects.length === 1 ? "" : "s"} for
+                <span className="font-black text-white">${selectedPeriod.periodName}</span>.
+              </p>
+            `
+          : html`<p className="mt-3 text-sm text-slate-400">Choose a period to show only that class.</p>`}
+      </div>
+
       ${loading
         ? html`<${EmptyState} icon=${Activity} title="Loading live projects" />`
-        : activeProjects.length === 0
-          ? html`<${EmptyState} icon=${Monitor} title="No active filming sessions" body="Create a project and assign students to see live progress here." />`
+        : !selectedPeriodId
+          ? html`<${EmptyState} icon=${LayoutGrid} title="Select a period" body="The monitor now shows one class period at a time." />`
+          : activeProjects.length === 0
+            ? html`<${EmptyState} icon=${Monitor} title="No active filming sessions" body="Create a project for this period to see live progress here." />`
           : html`
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 ${activeProjects.map(
@@ -836,6 +1093,7 @@ function MonitorDashboard({ projects, loading, error, studentProfiles }) {
                     <${ProjectMonitorCard}
                       key=${project.id}
                       project=${project}
+                      enrollments=${selectedEnrollments}
                       profileByEmail=${profileByEmail}
                       interestIndex=${interestIndex}
                     />
@@ -847,9 +1105,12 @@ function MonitorDashboard({ projects, loading, error, studentProfiles }) {
   `;
 }
 
-function ProjectMonitorCard({ project, profileByEmail, interestIndex }) {
+function ProjectMonitorCard({ project, enrollments, profileByEmail, interestIndex }) {
   const progress = projectProgress(project);
-  const students = project.assignedStudentEmails || [];
+  const students =
+    project.assignedStudentEmails?.length
+      ? project.assignedStudentEmails
+      : enrollments.map((enrollment) => enrollment.studentEmail);
   const interestPool = students.flatMap((email) =>
     flattenStudentInterests(profileByEmail.get(normalizeEmail(email))).map(
       (interest) => `${titleFromEmail(email)} - ${interest}`,
@@ -902,7 +1163,306 @@ function ProjectMonitorCard({ project, profileByEmail, interestIndex }) {
   `;
 }
 
-function ProjectManager({ profile, projects, loading, error, setToast, onPreviewStudent }) {
+function PeriodManager({ profile, periods, enrollments, loading, error, setToast }) {
+  return html`
+    <section className="space-y-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Class Codes</p>
+          <h1 className="mt-1 text-3xl font-black text-white">Manage Periods</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+            Create class periods and share join codes so students can enroll themselves.
+          </p>
+        </div>
+        <${Badge} icon=${LayoutGrid}>${periods.filter((period) => period.active && !period.archived).length} active</${Badge}>
+      </div>
+
+      <${PeriodCreateForm} profile=${profile} setToast=${setToast} />
+
+      ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
+      ${loading
+        ? html`<${EmptyState} icon=${LayoutGrid} title="Loading periods" />`
+        : periods.length === 0
+          ? html`<${EmptyState} icon=${LayoutGrid} title="No periods yet" body="Create your first period to generate a student join code." />`
+          : html`
+              <div className="grid gap-4 xl:grid-cols-2">
+                ${periods.map(
+                  (period) => html`
+                    <${PeriodCard}
+                      key=${period.id}
+                      profile=${profile}
+                      period=${period}
+                      enrollments=${enrollments.filter((enrollment) => enrollment.periodId === period.id)}
+                      setToast=${setToast}
+                    />
+                  `,
+                )}
+              </div>
+            `}
+    </section>
+  `;
+}
+
+function PeriodCreateForm({ profile, setToast }) {
+  const [form, setForm] = useState({ periodName: "", courseName: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    if (!safeText(form.periodName)) {
+      setError("Period name is required.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const periodRef = doc(collection(db, "periods"));
+      const joinCode = await createUniqueJoinCode(form.periodName, form.courseName);
+      const periodPayload = {
+        periodId: periodRef.id,
+        teacherId: profile.uid,
+        teacherEmail: profile.email,
+        teacherName: profile.displayName,
+        periodName: safeText(form.periodName),
+        courseName: safeText(form.courseName),
+        joinCode,
+        joinCodeLowercase: joinCodeLowercase(joinCode),
+        active: true,
+        archived: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(periodRef, periodPayload);
+      await setDoc(doc(db, "periodJoinCodes", periodPayload.joinCodeLowercase), {
+        periodId: periodRef.id,
+        teacherId: profile.uid,
+        teacherEmail: profile.email,
+        teacherName: profile.displayName,
+        periodName: periodPayload.periodName,
+        courseName: periodPayload.courseName,
+        joinCode,
+        joinCodeLowercase: periodPayload.joinCodeLowercase,
+        active: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setForm({ periodName: "", courseName: "" });
+      setToast(`Period created. Code: ${joinCode}`);
+    } catch (createError) {
+      setError(createError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <form onSubmit=${submit} className="vp-panel rounded-3xl p-4 sm:p-5">
+      <div className="mb-4">
+        <h2 className="text-lg font-black text-white">Create period</h2>
+        <p className="text-sm text-slate-400">A unique join code is generated automatically.</p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <label className="grid gap-1 text-sm font-bold text-slate-300">
+          Period name
+          <${TextInput}
+            value=${form.periodName}
+            onInput=${(event) => update("periodName", event.currentTarget.value)}
+            placeholder="Period 5"
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-bold text-slate-300">
+          Course name
+          <${TextInput}
+            value=${form.courseName}
+            onInput=${(event) => update("courseName", event.currentTarget.value)}
+            placeholder="Video Production"
+          />
+        </label>
+        <div className="flex items-end">
+          <${Button} icon=${Plus} type="submit" disabled=${busy} className="w-full">
+            ${busy ? "Creating..." : "Create"}
+          </${Button}>
+        </div>
+      </div>
+      ${error ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
+    </form>
+  `;
+}
+
+function PeriodCard({ profile, period, enrollments, setToast }) {
+  const [busy, setBusy] = useState("");
+  const activeEnrollments = enrollments.filter((enrollment) => enrollment.active !== false);
+
+  const regenerateCode = async () => {
+    if (!window.confirm(`Regenerate the join code for ${period.periodName}? The old code will stop working.`)) return;
+    setBusy("code");
+    try {
+      const joinCode = await createUniqueJoinCode(period.periodName, period.courseName);
+      if (period.joinCodeLowercase) {
+        await setDoc(
+          doc(db, "periodJoinCodes", period.joinCodeLowercase),
+          { active: false, updatedAt: serverTimestamp() },
+          { merge: true },
+        );
+      }
+      await updateDoc(doc(db, "periods", period.id), {
+        joinCode,
+        joinCodeLowercase: joinCodeLowercase(joinCode),
+        updatedAt: serverTimestamp(),
+      });
+      await setDoc(doc(db, "periodJoinCodes", joinCodeLowercase(joinCode)), {
+        periodId: period.id,
+        teacherId: period.teacherId || profile.uid,
+        teacherEmail: period.teacherEmail || profile.email,
+        teacherName: period.teacherName || profile.displayName,
+        periodName: period.periodName,
+        courseName: period.courseName || "",
+        joinCode,
+        joinCodeLowercase: joinCodeLowercase(joinCode),
+        active: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setToast(`New code: ${joinCode}`);
+    } catch (codeError) {
+      setToast(codeError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const archivePeriod = async () => {
+    const warning = activeEnrollments.length
+      ? `Archive ${period.periodName}? It has ${activeEnrollments.length} enrolled student${activeEnrollments.length === 1 ? "" : "s"}. Student work will remain saved.`
+      : `Archive ${period.periodName}?`;
+    if (!window.confirm(warning)) return;
+    setBusy("archive");
+    try {
+      await updateDoc(doc(db, "periods", period.id), {
+        active: false,
+        archived: true,
+        updatedAt: serverTimestamp(),
+      });
+      if (period.joinCodeLowercase) {
+        await setDoc(
+          doc(db, "periodJoinCodes", period.joinCodeLowercase),
+          { active: false, updatedAt: serverTimestamp() },
+          { merge: true },
+        );
+      }
+      setToast(`${period.periodName} archived`);
+    } catch (archiveError) {
+      setToast(archiveError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const removeStudent = async (enrollment) => {
+    if (!window.confirm(`Remove ${enrollment.studentName || enrollment.studentEmail} from ${period.periodName}?`)) return;
+    setBusy(enrollment.id);
+    try {
+      await updateDoc(doc(db, "periodEnrollments", enrollment.id), {
+        active: false,
+        removedAt: serverTimestamp(),
+      });
+      setToast("Student removed from period");
+    } catch (removeError) {
+      setToast(removeError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return html`
+    <article className=${classNames("vp-panel rounded-3xl p-4", period.archived ? "opacity-65" : "")}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">
+            ${period.courseName || "Course"}
+          </p>
+          <h2 className="mt-1 text-xl font-black text-white">${period.periodName}</h2>
+          <p className="mt-1 text-sm text-slate-400">${activeEnrollments.length} enrolled student${activeEnrollments.length === 1 ? "" : "s"}</p>
+        </div>
+        <${Badge} icon=${period.active && !period.archived ? Radio : Archive}>
+          ${period.active && !period.archived ? "Active" : "Archived"}
+        </${Badge}>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-lens/20 bg-lens/10 p-4">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-lens">Join code</p>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="select-all text-2xl font-black tracking-[0.12em] text-white">${period.joinCode}</p>
+          <div className="flex flex-wrap gap-2">
+            <${Button}
+              icon=${Copy}
+              variant="secondary"
+              onClick=${() => copyText(period.joinCode, "Join code", setToast)}
+            >
+              Copy
+            </${Button}>
+            <${Button}
+              icon=${RefreshCcw}
+              variant="ghost"
+              disabled=${busy === "code" || period.archived}
+              onClick=${regenerateCode}
+            >
+              Regenerate
+            </${Button}>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="font-black text-white">Enrolled students</h3>
+          <${Badge} icon=${Users}>${activeEnrollments.length}</${Badge}>
+        </div>
+        ${activeEnrollments.length === 0
+          ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No students have joined yet.</p>`
+          : html`
+              <div className="grid gap-2">
+                ${activeEnrollments.map(
+                  (enrollment) => html`
+                    <div key=${enrollment.id} className="flex flex-col gap-2 rounded-2xl bg-slate-950/42 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="truncate font-black text-white">${enrollment.studentName || titleFromEmail(enrollment.studentEmail)}</p>
+                        <p className="truncate text-sm text-slate-500">${enrollment.studentEmail}</p>
+                      </div>
+                      <${Button}
+                        icon=${X}
+                        variant="ghost"
+                        disabled=${busy === enrollment.id}
+                        onClick=${() => removeStudent(enrollment)}
+                      >
+                        Remove
+                      </${Button}>
+                    </div>
+                  `,
+                )}
+              </div>
+            `}
+      </div>
+
+      <div className="mt-4 flex justify-end">
+        <${Button}
+          icon=${Archive}
+          variant="danger"
+          disabled=${busy === "archive" || period.archived}
+          onClick=${archivePeriod}
+        >
+          Archive Period
+        </${Button}>
+      </div>
+    </article>
+  `;
+}
+
+function ProjectManager({ profile, projects, loading, error, setToast, onPreviewStudent, periods }) {
   return html`
     <section className="space-y-5">
       <div>
@@ -913,7 +1473,7 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
         </p>
       </div>
 
-      <${ProjectCreateForm} profile=${profile} setToast=${setToast} />
+      <${ProjectCreateForm} profile=${profile} periods=${periods} setToast=${setToast} />
 
       ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
       ${loading
@@ -937,11 +1497,13 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
   `;
 }
 
-function ProjectCreateForm({ profile, setToast }) {
+function ProjectCreateForm({ profile, periods, setToast }) {
+  const activePeriods = periods.filter((period) => period.active && !period.archived);
   const [form, setForm] = useState({
     title: "",
     objective: "",
     dueDate: todayISO(),
+    periodId: "",
     groupName: "",
     assignedStudents: "",
     assignedTeacherEmail: profile.email,
@@ -953,20 +1515,28 @@ function ProjectCreateForm({ profile, setToast }) {
 
   const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
+  useEffect(() => {
+    if (!activePeriods.length) return;
+    setForm((current) =>
+      current.periodId && activePeriods.some((period) => period.id === current.periodId)
+        ? current
+        : { ...current, periodId: activePeriods[0].id },
+    );
+  }, [activePeriods.map((period) => period.id).join("|")]);
+
   const submit = async (event) => {
     event.preventDefault();
     setError("");
+    const selectedPeriod = activePeriods.find((period) => period.id === form.periodId);
     const assignedStudentEmails = splitEmails(form.assignedStudents);
-    const assignedTeacherEmail = normalizeEmail(
-      isVideoAdmin(profile) ? form.assignedTeacherEmail : profile.email,
-    );
+    const assignedTeacherEmail = normalizeEmail(selectedPeriod?.teacherEmail || profile.email);
 
     if (!safeText(form.title) || !safeText(form.objective)) {
       setError("Project title and objective are required.");
       return;
     }
-    if (!assignedStudentEmails.length) {
-      setError("Assign at least one student email.");
+    if (!selectedPeriod) {
+      setError("Create or select a period before creating a project.");
       return;
     }
     if (assignedStudentEmails.some((email) => !isAllowedDoralEmail(email))) {
@@ -985,13 +1555,18 @@ function ProjectCreateForm({ profile, setToast }) {
         objective: safeText(form.objective),
         description: safeText(form.objective),
         dueDate: form.dueDate || todayISO(),
-        groupName: safeText(form.groupName) || "Production Group",
+        periodId: selectedPeriod.id,
+        periodName: selectedPeriod.periodName,
+        courseName: selectedPeriod.courseName || "",
+        groupName: safeText(form.groupName) || selectedPeriod.periodName,
         groupMode: Boolean(form.groupMode),
         assignedStudentEmails,
         assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+        teacherId: selectedPeriod.teacherId || profile.uid,
         assignedTeacherEmail,
         assignedTeacherName:
-          assignedTeacherEmail === profile.email ? profile.displayName : titleFromEmail(assignedTeacherEmail),
+          selectedPeriod.teacherName ||
+          (assignedTeacherEmail === profile.email ? profile.displayName : titleFromEmail(assignedTeacherEmail)),
         teacherNotes: safeText(form.teacherNotes),
         status: "active",
         filmingStatus: "Not started",
@@ -1012,6 +1587,7 @@ function ProjectCreateForm({ profile, setToast }) {
         title: "",
         objective: "",
         dueDate: todayISO(),
+        periodId: activePeriods[0]?.id || "",
         groupName: "",
         assignedStudents: "",
         assignedTeacherEmail: profile.email,
@@ -1026,6 +1602,16 @@ function ProjectCreateForm({ profile, setToast }) {
     }
   };
 
+  if (!activePeriods.length) {
+    return html`
+      <${EmptyState}
+        icon=${LayoutGrid}
+        title="Create a period first"
+        body="Projects now belong to a class period so students can join with a code."
+      />
+    `;
+  }
+
   return html`
     <form onSubmit=${submit} className="vp-panel rounded-3xl p-4 sm:p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -1036,6 +1622,21 @@ function ProjectCreateForm({ profile, setToast }) {
         <${Badge} icon=${Plus}>New</${Badge}>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
+        <label className="grid gap-1 text-sm font-bold text-slate-300">
+          Class period
+          <${Select}
+            value=${form.periodId}
+            onChange=${(event) => update("periodId", event.currentTarget.value)}
+          >
+            ${activePeriods.map(
+              (period) => html`
+                <option key=${period.id} value=${period.id}>
+                  ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
+                </option>
+              `,
+            )}
+          </${Select}>
+        </label>
         <label className="grid gap-1 text-sm font-bold text-slate-300">
           Project title
           <${TextInput} value=${form.title} onInput=${(event) => update("title", event.currentTarget.value)} placeholder="Documentary opening package" />
@@ -1049,17 +1650,9 @@ function ProjectCreateForm({ profile, setToast }) {
           <${TextInput} value=${form.groupName} onInput=${(event) => update("groupName", event.currentTarget.value)} placeholder="Period 4 Crew A" />
         </label>
         <label className="grid gap-1 text-sm font-bold text-slate-300">
-          Assigned student emails
+          Assigned student emails (optional)
           <${TextInput} value=${form.assignedStudents} onInput=${(event) => update("assignedStudents", event.currentTarget.value)} placeholder="student@student.doralacademynv.org" />
         </label>
-        ${isVideoAdmin(profile)
-          ? html`
-              <label className="grid gap-1 text-sm font-bold text-slate-300">
-                Assigned teacher email
-                <${TextInput} value=${form.assignedTeacherEmail} onInput=${(event) => update("assignedTeacherEmail", event.currentTarget.value)} />
-              </label>
-            `
-          : null}
         <label className="flex items-center gap-3 rounded-2xl bg-slate-950/40 p-3 text-sm font-bold text-slate-300 ring-1 ring-slate-700/70">
           <input type="checkbox" checked=${form.groupMode} onChange=${(event) => update("groupMode", event.currentTarget.checked)} />
           Group mode
@@ -1108,6 +1701,7 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
       </div>
       <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-300">${project.objective}</p>
       <div className="mt-3 flex flex-wrap gap-2">
+        ${project.periodName ? html`<${Badge} icon=${LayoutGrid}>${project.periodName}</${Badge}>` : null}
         <${Badge} icon=${Users}>${(project.assignedStudentEmails || []).length} students</${Badge}>
         <${Badge} icon=${UserCog}>${project.assignedTeacherEmail}</${Badge}>
         <${Badge} icon=${Radio}>${project.status}</${Badge}>
@@ -1146,7 +1740,107 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
   `;
 }
 
-function StudentFilmingHome({ profile, projects, loading, error, setToast, setKioskActive }) {
+function StudentJoinPeriod({ profile, setToast }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const joinPeriod = async (event) => {
+    event.preventDefault();
+    setError("");
+    const normalizedCode = normalizeJoinCode(code);
+    const codeKey = joinCodeLowercase(normalizedCode);
+    if (!normalizedCode) {
+      setError("Enter the class code from your teacher.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const codeSnapshot = await getDoc(doc(db, "periodJoinCodes", codeKey));
+      if (!codeSnapshot.exists() || codeSnapshot.data().active !== true) {
+        setError("That class code was not found or is no longer active.");
+        return;
+      }
+      const periodCode = codeSnapshot.data();
+      const enrollmentId = `${periodCode.periodId}_${profile.uid}`;
+      const enrollmentRef = doc(db, "periodEnrollments", enrollmentId);
+      const existingEnrollment = await getDoc(enrollmentRef);
+      if (existingEnrollment.exists() && existingEnrollment.data().active !== false) {
+        setError("You have already joined this period.");
+        return;
+      }
+      if (existingEnrollment.exists()) {
+        setError("Your previous enrollment was removed. Ask your teacher to add you back.");
+        return;
+      }
+
+      await setDoc(enrollmentRef, {
+        enrollmentId,
+        studentId: profile.uid,
+        studentEmail: profile.email,
+        studentName: profile.displayName,
+        periodId: periodCode.periodId,
+        periodName: periodCode.periodName,
+        courseName: periodCode.courseName || "",
+        teacherId: periodCode.teacherId,
+        teacherEmail: periodCode.teacherEmail || "",
+        teacherName: periodCode.teacherName || "",
+        joinCodeLowercase: codeKey,
+        active: true,
+        joinedAt: serverTimestamp(),
+        removedAt: "",
+      });
+      setCode("");
+      setToast(`Joined ${periodCode.periodName}`);
+    } catch (joinError) {
+      setError(joinError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <section className="grid min-h-[70vh] place-items-center">
+      <form onSubmit=${joinPeriod} className="vp-panel w-full max-w-xl rounded-3xl p-5 text-center sm:p-7">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-lens/12 text-lens ring-1 ring-lens/25">
+          <${LayoutGrid} size=${28} />
+        </div>
+        <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Class Code Required</p>
+        <h1 className="mt-2 text-3xl font-black text-white">Enter Class Code</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-400">
+          Ask your teacher for the Video Production period code before opening class projects.
+        </p>
+        <${TextInput}
+          value=${code}
+          onInput=${(event) => setCode(normalizeJoinCode(event.currentTarget.value))}
+          placeholder="VP5-9137"
+          autoCapitalize="characters"
+          autoComplete="off"
+          spellCheck=${false}
+          className="mt-5 text-center text-2xl font-black tracking-[0.16em]"
+        />
+        ${error ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
+        <${Button} icon=${LogIn} type="submit" disabled=${busy} className="mt-4 w-full">
+          ${busy ? "Joining..." : "Join Period"}
+        </${Button}>
+      </form>
+    </section>
+  `;
+}
+
+function StudentFilmingHome({
+  profile,
+  projects,
+  loading,
+  error,
+  enrollments,
+  enrollmentsLoading,
+  enrollmentsError,
+  setToast,
+  setKioskActive,
+}) {
+  const activeEnrollments = enrollments.filter((enrollment) => enrollment.active !== false);
   const activeProjects = projects.filter((project) => project.status !== "archived");
   const [selectedProjectId, setSelectedProjectId] = useState(() =>
     window.sessionStorage.getItem("videoStudio.selectedProjectId") || "",
@@ -1162,14 +1856,19 @@ function StudentFilmingHome({ profile, projects, loading, error, setToast, setKi
 
   const selectedProject = activeProjects.find((project) => project.id === selectedProjectId);
 
+  if (enrollmentsLoading) return html`<${EmptyState} icon=${LayoutGrid} title="Checking period enrollment" />`;
+  if (enrollmentsError) return html`<${EmptyState} icon=${AlertTriangle} title="Enrollment error" body=${enrollmentsError} />`;
+  if (!activeEnrollments.length) {
+    return html`<${StudentJoinPeriod} profile=${profile} setToast=${setToast} />`;
+  }
   if (loading) return html`<${EmptyState} icon=${Camera} title="Loading assigned projects" />`;
   if (error) return html`<${EmptyState} icon=${AlertTriangle} title="Project access error" body=${error} />`;
   if (!activeProjects.length) {
     return html`
       <${EmptyState}
         icon=${Camera}
-        title="No assigned filming project"
-        body="Your teacher must assign your email to a Video Production Studio project before this page opens."
+        title="No projects for your joined period"
+        body="You joined a period. Your teacher still needs to create or activate a project for it."
       />
     `;
   }
@@ -2000,9 +2699,21 @@ function VideoProductionApp() {
   const { user, profile, loading, error } = useVideoAuthProfile();
   const [view, setView] = useState("");
   const [previewProjectId, setPreviewProjectId] = useState("");
+  const [selectedPeriodId, setSelectedPeriodIdState] = useState(() =>
+    window.sessionStorage.getItem(PERIOD_SESSION_KEY) || "",
+  );
   const [toast, setToast] = useState("");
   const [kioskActive, setKioskActive] = useState(false);
-  const { projects, loading: projectsLoading, error: projectsError } = useVideoProjects(profile);
+  const { periods, loading: periodsLoading, error: periodsError } = usePeriods(profile);
+  const {
+    enrollments,
+    loading: enrollmentsLoading,
+    error: enrollmentsError,
+  } = usePeriodEnrollments(profile);
+  const { projects, loading: projectsLoading, error: projectsError } = useVideoProjects(
+    profile,
+    enrollments,
+  );
   const { users, loading: usersLoading, error: usersError } = useVideoUsers(isVideoAdmin(profile));
   const { profiles: studentProfiles, error: profilesError } = useVideoStudentProfiles(
     isVideoTeacher(profile) || isVideoAdmin(profile),
@@ -2021,6 +2732,30 @@ function VideoProductionApp() {
   useEffect(() => {
     if (!isVideoAdmin(profile)) setPreviewProjectId("");
   }, [profile?.role]);
+
+  const activeTeacherPeriods = periods.filter((period) => period.active && !period.archived);
+
+  useEffect(() => {
+    if (!isVideoAdmin(profile) && !isVideoTeacher(profile)) {
+      setSelectedPeriodIdState("");
+      return;
+    }
+    if (!activeTeacherPeriods.length) {
+      setSelectedPeriodIdState("");
+      return;
+    }
+    if (!activeTeacherPeriods.some((period) => period.id === selectedPeriodId)) {
+      const nextPeriodId = activeTeacherPeriods[0].id;
+      setSelectedPeriodIdState(nextPeriodId);
+      window.sessionStorage.setItem(PERIOD_SESSION_KEY, nextPeriodId);
+    }
+  }, [activeTeacherPeriods.map((period) => period.id).join("|"), profile?.role, selectedPeriodId]);
+
+  const setSelectedPeriodId = (periodId) => {
+    setSelectedPeriodIdState(periodId);
+    if (periodId) window.sessionStorage.setItem(PERIOD_SESSION_KEY, periodId);
+    else window.sessionStorage.removeItem(PERIOD_SESSION_KEY);
+  };
 
   if (loading) return html`<${LoadingScreen} />`;
   if (!user) return html`<${VideoLogin} error=${error} />`;
@@ -2053,6 +2788,9 @@ function VideoProductionApp() {
         projects=${projects}
         loading=${projectsLoading}
         error=${projectsError}
+        enrollments=${enrollments}
+        enrollmentsLoading=${enrollmentsLoading}
+        enrollmentsError=${enrollmentsError}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
       />
@@ -2064,8 +2802,23 @@ function VideoProductionApp() {
       <${MonitorDashboard}
         projects=${projects}
         loading=${projectsLoading}
-        error=${projectsError || profilesError}
+        error=${projectsError || periodsError || enrollmentsError || profilesError}
         studentProfiles=${studentProfiles}
+        periods=${periods}
+        enrollments=${enrollments}
+        selectedPeriodId=${selectedPeriodId}
+        setSelectedPeriodId=${setSelectedPeriodId}
+      />
+    `;
+  } else if (activeView === "periods" && (isVideoTeacher(profile) || isVideoAdmin(profile))) {
+    content = html`
+      <${PeriodManager}
+        profile=${profile}
+        periods=${periods}
+        enrollments=${enrollments}
+        loading=${periodsLoading}
+        error=${periodsError || enrollmentsError}
+        setToast=${setToast}
       />
     `;
   } else if (activeView === "projects" && (isVideoTeacher(profile) || isVideoAdmin(profile))) {
@@ -2080,6 +2833,7 @@ function VideoProductionApp() {
           setPreviewProjectId(projectId);
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
+        periods=${periods}
       />
     `;
   } else if (activeView === "users" && isVideoAdmin(profile)) {

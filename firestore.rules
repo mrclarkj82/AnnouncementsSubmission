@@ -203,15 +203,58 @@ service cloud.firestore {
       return /databases/$(database)/documents/videoProjects/$(projectId);
     }
 
+    function periodPath(periodId) {
+      return /databases/$(database)/documents/periods/$(periodId);
+    }
+
+    function periodJoinCodePath(codeId) {
+      return /databases/$(database)/documents/periodJoinCodes/$(codeId);
+    }
+
+    function periodEnrollmentPath(periodId, studentId) {
+      return /databases/$(database)/documents/periodEnrollments/$(periodId + "_" + studentId);
+    }
+
+    function canManagePeriodData(periodData) {
+      return isVideoAdmin()
+        || (isVideoTeacher() && periodData.teacherId == request.auth.uid);
+    }
+
+    function canManagePeriodId(periodId) {
+      return isVideoAdmin()
+        || (
+          exists(periodPath(periodId))
+          && isVideoTeacher()
+          && get(periodPath(periodId)).data.teacherId == request.auth.uid
+        );
+    }
+
+    function hasActivePeriodEnrollment(periodId) {
+      return isVideoStudent()
+        && periodId is string
+        && exists(periodEnrollmentPath(periodId, request.auth.uid))
+        && get(periodEnrollmentPath(periodId, request.auth.uid)).data.active == true
+        && get(periodEnrollmentPath(periodId, request.auth.uid)).data.studentId == request.auth.uid
+        && get(periodEnrollmentPath(periodId, request.auth.uid)).data.studentEmail == signedInEmail();
+    }
+
     function isAssignedVideoTeacher(projectData) {
       return isVideoTeacher()
-        && projectData.assignedTeacherEmail == signedInEmail();
+        && (
+          projectData.assignedTeacherEmail == signedInEmail()
+          || projectData.teacherId == request.auth.uid
+        );
     }
 
     function isAssignedVideoStudent(projectData) {
       return isVideoStudent()
-        && projectData.assignedStudentEmails is list
-        && signedInEmail() in projectData.assignedStudentEmails;
+        && (
+          (
+            projectData.assignedStudentEmails is list
+            && signedInEmail() in projectData.assignedStudentEmails
+          )
+          || hasActivePeriodEnrollment(projectData.periodId)
+        );
     }
 
     function canReadVideoProject(projectData) {
@@ -229,7 +272,85 @@ service cloud.firestore {
       return request.resource.data.assignedTeacherEmail is string
         && request.resource.data.assignedTeacherEmail.matches('^[^@]+@doralacademynv\\.org$')
         && request.resource.data.assignedStudentEmails is list
+        && request.resource.data.periodId is string
         && validVideoProjectStatus(request.resource.data.status);
+    }
+
+    function validPeriod(periodId) {
+      return request.resource.data.keys().hasOnly([
+          "periodId",
+          "teacherId",
+          "teacherEmail",
+          "teacherName",
+          "periodName",
+          "courseName",
+          "joinCode",
+          "joinCodeLowercase",
+          "active",
+          "archived",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.periodId == periodId
+        && request.resource.data.teacherId is string
+        && request.resource.data.teacherEmail is string
+        && request.resource.data.teacherEmail.matches('^[^@]+@doralacademynv\\.org$')
+        && request.resource.data.periodName is string
+        && request.resource.data.courseName is string
+        && request.resource.data.joinCode is string
+        && request.resource.data.joinCodeLowercase is string
+        && request.resource.data.active is bool
+        && request.resource.data.archived is bool;
+    }
+
+    function validPeriodJoinCode(codeId) {
+      return request.resource.data.keys().hasOnly([
+          "periodId",
+          "teacherId",
+          "teacherEmail",
+          "teacherName",
+          "periodName",
+          "courseName",
+          "joinCode",
+          "joinCodeLowercase",
+          "active",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.joinCodeLowercase == codeId
+        && request.resource.data.periodId is string
+        && request.resource.data.teacherId is string
+        && request.resource.data.teacherEmail is string
+        && request.resource.data.periodName is string
+        && request.resource.data.courseName is string
+        && request.resource.data.joinCode is string
+        && request.resource.data.active is bool;
+    }
+
+    function validPeriodEnrollment(enrollmentId) {
+      return request.resource.data.keys().hasOnly([
+          "enrollmentId",
+          "studentId",
+          "studentEmail",
+          "studentName",
+          "periodId",
+          "periodName",
+          "courseName",
+          "teacherId",
+          "teacherEmail",
+          "teacherName",
+          "joinCodeLowercase",
+          "active",
+          "joinedAt",
+          "removedAt"
+        ])
+        && request.resource.data.enrollmentId == enrollmentId
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.studentEmail == signedInEmail()
+        && request.resource.data.periodId is string
+        && request.resource.data.joinCodeLowercase is string
+        && request.resource.data.active == true
+        && request.resource.data.removedAt == "";
     }
 
     match /authorizedUsers/{userEmail} {
@@ -386,18 +507,103 @@ service cloud.firestore {
       allow delete: if isVideoAdmin();
     }
 
+    match /periods/{periodId} {
+      allow get, list: if isVideoAdmin()
+        || canManagePeriodData(resource.data)
+        || hasActivePeriodEnrollment(periodId);
+      allow create: if isVideoAdmin()
+        && validPeriod(periodId);
+      allow create: if isVideoTeacher()
+        && validPeriod(periodId)
+        && request.resource.data.teacherId == request.auth.uid
+        && request.resource.data.teacherEmail == signedInEmail();
+      allow update: if isVideoAdmin()
+        && validPeriod(periodId);
+      allow update: if canManagePeriodData(resource.data)
+        && validPeriod(periodId)
+        && request.resource.data.teacherId == resource.data.teacherId
+        && request.resource.data.teacherEmail == resource.data.teacherEmail
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "periodName",
+          "courseName",
+          "joinCode",
+          "joinCodeLowercase",
+          "active",
+          "archived",
+          "updatedAt"
+        ]);
+      allow delete: if isVideoAdmin();
+    }
+
+    match /periodJoinCodes/{codeId} {
+      allow get: if isVideoAdmin()
+        || (isVideoTeacher() && resource.data.teacherId == request.auth.uid)
+        || (hasVideoAccess() && resource.data.active == true);
+      allow list: if isVideoAdmin();
+      allow create: if isVideoAdmin()
+        && validPeriodJoinCode(codeId)
+        && canManagePeriodId(request.resource.data.periodId);
+      allow create: if isVideoTeacher()
+        && validPeriodJoinCode(codeId)
+        && canManagePeriodId(request.resource.data.periodId);
+      allow update: if isVideoAdmin()
+        && validPeriodJoinCode(codeId)
+        && request.resource.data.periodId == resource.data.periodId;
+      allow update: if isVideoTeacher()
+        && resource.data.teacherId == request.auth.uid
+        && validPeriodJoinCode(codeId)
+        && request.resource.data.periodId == resource.data.periodId
+        && request.resource.data.teacherId == resource.data.teacherId;
+      allow delete: if isVideoAdmin();
+    }
+
+    match /periodEnrollments/{enrollmentId} {
+      allow get, list: if isVideoAdmin()
+        || (isVideoTeacher() && resource.data.teacherId == request.auth.uid)
+        || (isVideoStudent() && resource.data.studentId == request.auth.uid);
+      allow create: if isVideoStudent()
+        && validPeriodEnrollment(enrollmentId)
+        && enrollmentId == request.resource.data.periodId + "_" + request.auth.uid
+        && exists(periodJoinCodePath(request.resource.data.joinCodeLowercase))
+        && get(periodJoinCodePath(request.resource.data.joinCodeLowercase)).data.active == true
+        && get(periodJoinCodePath(request.resource.data.joinCodeLowercase)).data.periodId == request.resource.data.periodId
+        && get(periodJoinCodePath(request.resource.data.joinCodeLowercase)).data.periodName == request.resource.data.periodName
+        && get(periodJoinCodePath(request.resource.data.joinCodeLowercase)).data.teacherId == request.resource.data.teacherId
+        && exists(periodPath(request.resource.data.periodId))
+        && get(periodPath(request.resource.data.periodId)).data.active == true
+        && get(periodPath(request.resource.data.periodId)).data.archived == false;
+      allow update: if isVideoAdmin();
+      allow update: if isVideoTeacher()
+        && resource.data.teacherId == request.auth.uid
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.studentEmail == resource.data.studentEmail
+        && request.resource.data.periodId == resource.data.periodId
+        && request.resource.data.teacherId == resource.data.teacherId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "active",
+          "removedAt"
+        ]);
+      allow delete: if isVideoAdmin();
+    }
+
     match /videoProjects/{projectId} {
       allow get, list: if canReadVideoProject(resource.data);
       allow create: if isVideoAdmin()
-        && validVideoProjectBase();
+        && validVideoProjectBase()
+        && canManagePeriodId(request.resource.data.periodId);
       allow create: if isVideoTeacher()
         && validVideoProjectBase()
-        && request.resource.data.assignedTeacherEmail == signedInEmail();
+        && request.resource.data.assignedTeacherEmail == signedInEmail()
+        && canManagePeriodId(request.resource.data.periodId);
       allow update: if isVideoAdmin()
-        && validVideoProjectBase();
+        && validVideoProjectBase()
+        && canManagePeriodId(request.resource.data.periodId);
       allow update: if isAssignedVideoTeacher(resource.data)
         && validVideoProjectBase()
-        && request.resource.data.assignedTeacherEmail == resource.data.assignedTeacherEmail;
+        && request.resource.data.assignedTeacherEmail == resource.data.assignedTeacherEmail
+        && request.resource.data.periodId == resource.data.periodId
+        && canManagePeriodId(request.resource.data.periodId);
       allow update: if isAssignedVideoStudent(resource.data)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           "checklistItems",
