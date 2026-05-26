@@ -632,7 +632,7 @@ function usePeriodEnrollments(profile) {
       ? enrollmentsRef
       : isVideoTeacher(profile)
         ? query(enrollmentsRef, where("teacherId", "==", profile.uid))
-        : query(enrollmentsRef, where("studentId", "==", profile.uid));
+        : query(enrollmentsRef, where("studentEmail", "==", profile.email));
 
     const unsubscribe = onSnapshot(
       request,
@@ -2910,7 +2910,197 @@ function StudentProfileEditor({ profile, setToast }) {
   `;
 }
 
-function UserManagement({ profile, users, loading, error, setToast }) {
+function ManualPeriodEnrollmentForm({ profile, periods, enrollments, setToast }) {
+  const activePeriods = periods.filter((period) => period.active && !period.archived);
+  const [form, setForm] = useState(() => ({
+    email: "",
+    studentName: "",
+    periodId: activePeriods[0]?.id || "",
+  }));
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    if (!activePeriods.length) return;
+    setForm((current) =>
+      current.periodId && activePeriods.some((period) => period.id === current.periodId)
+        ? current
+        : { ...current, periodId: activePeriods[0].id },
+    );
+  }, [activePeriods.map((period) => period.id).join("|")]);
+
+  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+
+  const selectedPeriod = activePeriods.find((period) => period.id === form.periodId);
+  const selectedEnrollments = selectedPeriod
+    ? enrollments.filter(
+        (enrollment) => enrollment.periodId === selectedPeriod.id && enrollment.active !== false,
+      )
+    : [];
+
+  const addStudentToPeriod = async (event) => {
+    event.preventDefault();
+    setFormError("");
+    const studentEmail = normalizeEmail(form.email);
+    if (!selectedPeriod) {
+      setFormError("Choose an active period.");
+      return;
+    }
+    if (!isValidEmail(studentEmail) || !isStudentEmail(studentEmail)) {
+      setFormError("Use a valid @student.doralacademynv.org email address.");
+      return;
+    }
+
+    const existingEnrollment = enrollments.find(
+      (enrollment) =>
+        enrollment.periodId === selectedPeriod.id &&
+        normalizeEmail(enrollment.studentEmail) === studentEmail,
+    );
+    if (existingEnrollment?.active !== false) {
+      setFormError(`${studentEmail} is already active in ${selectedPeriod.periodName}.`);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const enrollmentId = existingEnrollment?.id || `${selectedPeriod.id}_${studentEmail}`;
+      await setDoc(
+        doc(db, "periodEnrollments", enrollmentId),
+        {
+          enrollmentId,
+          studentId: existingEnrollment?.studentId || studentEmail,
+          studentEmail,
+          studentName: safeText(form.studentName) || titleFromEmail(studentEmail),
+          periodId: selectedPeriod.id,
+          periodName: selectedPeriod.periodName,
+          courseName: selectedPeriod.courseName || "",
+          teacherId: selectedPeriod.teacherId || "",
+          teacherEmail: selectedPeriod.teacherEmail || "",
+          teacherName: selectedPeriod.teacherName || "",
+          joinCodeLowercase: existingEnrollment?.joinCodeLowercase || "manual",
+          active: true,
+          joinedAt: serverTimestamp(),
+          removedAt: "",
+        },
+        { merge: true },
+      );
+
+      const userRef = doc(db, "videoUsers", studentEmail);
+      const userSnapshot = await getDoc(userRef);
+      if (!userSnapshot.exists()) {
+        await setDoc(userRef, {
+          email: studentEmail,
+          role: VIDEO_ROLES.STUDENT,
+          active: true,
+          createdAt: serverTimestamp(),
+          createdBy: profile.email,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      setForm({ email: "", studentName: "", periodId: selectedPeriod.id });
+      setToast(`${studentEmail} added to ${selectedPeriod.periodName}`);
+    } catch (addError) {
+      setFormError(addError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <section className="vp-panel rounded-3xl p-4">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-lg font-black text-white">Add student to period</h2>
+          <p className="text-sm text-slate-400">
+            Manually place a student into a class period without using the join code.
+          </p>
+        </div>
+        <${Badge} icon=${LayoutGrid}>${activePeriods.length} active periods</${Badge}>
+      </div>
+
+      ${activePeriods.length === 0
+        ? html`
+            <p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-400">
+              Create an active period before adding students manually.
+            </p>
+          `
+        : html`
+            <form onSubmit=${addStudentToPeriod} className="grid gap-3 lg:grid-cols-[1fr_1fr_1.2fr_auto]">
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Period
+                <${Select}
+                  value=${form.periodId}
+                  onChange=${(event) => update("periodId", event.currentTarget.value)}
+                >
+                  ${activePeriods.map(
+                    (period) => html`
+                      <option key=${period.id} value=${period.id}>
+                        ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
+                      </option>
+                    `,
+                  )}
+                </${Select}>
+              </label>
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Student name
+                <${TextInput}
+                  value=${form.studentName}
+                  onInput=${(event) => update("studentName", event.currentTarget.value)}
+                  placeholder="Optional"
+                />
+              </label>
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Student email
+                <${TextInput}
+                  value=${form.email}
+                  onInput=${(event) => update("email", event.currentTarget.value)}
+                  placeholder="student@student.doralacademynv.org"
+                />
+              </label>
+              <div className="flex items-end">
+                <${Button} icon=${UserPlus} type="submit" disabled=${busy} className="w-full">
+                  ${busy ? "Adding..." : "Add to period"}
+                </${Button}>
+              </div>
+            </form>
+          `}
+
+      ${formError ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${formError}</p>` : null}
+      ${selectedPeriod
+        ? html`
+            <div className="mt-4 rounded-2xl bg-slate-950/35 p-3 ring-1 ring-slate-700/70">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-black text-white">${selectedPeriod.periodName}</p>
+                  <p className="text-sm text-slate-400">${selectedPeriod.courseName || "No course name"}</p>
+                </div>
+                <${Badge} icon=${Users}>${selectedEnrollments.length} enrolled</${Badge}>
+              </div>
+              ${selectedEnrollments.length
+                ? html`
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      ${selectedEnrollments.slice(0, 10).map(
+                        (enrollment) => html`
+                          <span key=${enrollment.id} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-slate-300 ring-1 ring-slate-700/70">
+                            ${enrollment.studentName || titleFromEmail(enrollment.studentEmail)}
+                          </span>
+                        `,
+                      )}
+                      ${selectedEnrollments.length > 10
+                        ? html`<span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-slate-500 ring-1 ring-slate-700/70">+${selectedEnrollments.length - 10} more</span>`
+                        : null}
+                    </div>
+                  `
+                : html`<p className="mt-3 text-sm text-slate-500">No students are enrolled in this period yet.</p>`}
+            </div>
+          `
+        : null}
+    </section>
+  `;
+}
+
+function UserManagement({ profile, users, loading, error, setToast, periods = [], enrollments = [] }) {
   const [form, setForm] = useState({ email: "", role: VIDEO_ROLES.STUDENT });
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
@@ -3011,6 +3201,13 @@ function UserManagement({ profile, users, loading, error, setToast }) {
         </div>
         ${formError ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${formError}</p>` : null}
       </form>
+
+      <${ManualPeriodEnrollmentForm}
+        profile=${profile}
+        periods=${periods}
+        enrollments=${enrollments}
+        setToast=${setToast}
+      />
 
       ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
       ${loading
@@ -3219,8 +3416,10 @@ function VideoProductionApp() {
         profile=${profile}
         users=${users}
         loading=${usersLoading}
-        error=${usersError}
+        error=${usersError || periodsError || enrollmentsError}
         setToast=${setToast}
+        periods=${periods}
+        enrollments=${enrollments}
       />
     `;
   } else {

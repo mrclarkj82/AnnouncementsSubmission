@@ -215,6 +215,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/periodEnrollments/$(periodId + "_" + studentId);
     }
 
+    function periodEnrollmentEmailPath(periodId, studentEmail) {
+      return /databases/$(database)/documents/periodEnrollments/$(periodId + "_" + studentEmail);
+    }
+
     function canManagePeriodData(periodData) {
       return isVideoAdmin()
         || (isVideoTeacher() && periodData.teacherId == request.auth.uid);
@@ -229,13 +233,27 @@ service cloud.firestore {
         );
     }
 
-    function hasActivePeriodEnrollment(periodId) {
-      return isVideoStudent()
-        && periodId is string
+    function hasActiveUidPeriodEnrollment(periodId) {
+      return periodId is string
         && exists(periodEnrollmentPath(periodId, request.auth.uid))
         && get(periodEnrollmentPath(periodId, request.auth.uid)).data.active == true
         && get(periodEnrollmentPath(periodId, request.auth.uid)).data.studentId == request.auth.uid
         && get(periodEnrollmentPath(periodId, request.auth.uid)).data.studentEmail == signedInEmail();
+    }
+
+    function hasActiveEmailPeriodEnrollment(periodId) {
+      return periodId is string
+        && exists(periodEnrollmentEmailPath(periodId, signedInEmail()))
+        && get(periodEnrollmentEmailPath(periodId, signedInEmail())).data.active == true
+        && get(periodEnrollmentEmailPath(periodId, signedInEmail())).data.studentEmail == signedInEmail();
+    }
+
+    function hasActivePeriodEnrollment(periodId) {
+      return isVideoStudent()
+        && (
+          hasActiveUidPeriodEnrollment(periodId)
+          || hasActiveEmailPeriodEnrollment(periodId)
+        );
     }
 
     function isAssignedVideoTeacher(projectData) {
@@ -349,6 +367,41 @@ service cloud.firestore {
         && request.resource.data.studentEmail == signedInEmail()
         && request.resource.data.periodId is string
         && request.resource.data.joinCodeLowercase is string
+        && request.resource.data.active == true
+        && request.resource.data.removedAt == "";
+    }
+
+    function validManualPeriodEnrollment(enrollmentId) {
+      return request.resource.data.keys().hasOnly([
+          "enrollmentId",
+          "studentId",
+          "studentEmail",
+          "studentName",
+          "periodId",
+          "periodName",
+          "courseName",
+          "teacherId",
+          "teacherEmail",
+          "teacherName",
+          "joinCodeLowercase",
+          "active",
+          "joinedAt",
+          "removedAt"
+        ])
+        && request.resource.data.enrollmentId == enrollmentId
+        && enrollmentId == request.resource.data.periodId + "_" + request.resource.data.studentEmail
+        && request.resource.data.studentId == request.resource.data.studentEmail
+        && request.resource.data.studentEmail is string
+        && request.resource.data.studentEmail == request.resource.data.studentEmail.lower()
+        && request.resource.data.studentEmail.matches('^[^@]+@student\\.doralacademynv\\.org$')
+        && request.resource.data.studentName is string
+        && request.resource.data.periodId is string
+        && request.resource.data.periodName is string
+        && request.resource.data.courseName is string
+        && request.resource.data.teacherId is string
+        && request.resource.data.teacherEmail is string
+        && request.resource.data.teacherName is string
+        && request.resource.data.joinCodeLowercase == "manual"
         && request.resource.data.active == true
         && request.resource.data.removedAt == "";
     }
@@ -559,7 +612,23 @@ service cloud.firestore {
     match /periodEnrollments/{enrollmentId} {
       allow get, list: if isVideoAdmin()
         || (isVideoTeacher() && resource.data.teacherId == request.auth.uid)
-        || (isVideoStudent() && resource.data.studentId == request.auth.uid);
+        || (
+          isVideoStudent()
+          && (
+            resource.data.studentId == request.auth.uid
+            || resource.data.studentEmail == signedInEmail()
+          )
+        );
+      allow create: if isVideoAdmin()
+        && validManualPeriodEnrollment(enrollmentId)
+        && exists(periodPath(request.resource.data.periodId))
+        && get(periodPath(request.resource.data.periodId)).data.active == true
+        && get(periodPath(request.resource.data.periodId)).data.archived == false
+        && get(periodPath(request.resource.data.periodId)).data.periodName == request.resource.data.periodName
+        && get(periodPath(request.resource.data.periodId)).data.courseName == request.resource.data.courseName
+        && get(periodPath(request.resource.data.periodId)).data.teacherId == request.resource.data.teacherId
+        && get(periodPath(request.resource.data.periodId)).data.teacherEmail == request.resource.data.teacherEmail
+        && get(periodPath(request.resource.data.periodId)).data.teacherName == request.resource.data.teacherName;
       allow create: if isVideoStudent()
         && validPeriodEnrollment(enrollmentId)
         && enrollmentId == request.resource.data.periodId + "_" + request.auth.uid
