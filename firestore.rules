@@ -537,9 +537,7 @@ service cloud.firestore {
     }
 
     match /periodJoinCodes/{codeId} {
-      allow get: if isVideoAdmin()
-        || (isVideoTeacher() && resource.data.teacherId == request.auth.uid)
-        || (hasVideoAccess() && resource.data.active == true);
+      allow get: if hasVideoAccess();
       allow list: if isVideoAdmin();
       allow create: if isVideoAdmin()
         && validPeriodJoinCode(codeId)

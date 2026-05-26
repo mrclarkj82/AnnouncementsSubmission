@@ -36,4 +36,4 @@ Teachers only paste Google Drive links; the app does not upload video files.
 
 Video Production Studio is a separate direct-entry app at `video-production.html`. It is intentionally not linked from Broadcast Desk, and Broadcast Desk is not linked from Video Production Studio.
 
-Video Production teachers can create class periods with join codes. Students must join an active period by code before they can see period projects or filming workflows.
+Video Production teachers can create class periods with join codes. Students must join an active period by code before they can see period projects or filming workflows. Projects are assigned to a period and can include multiple editable student groups. Teachers and admins can preview a period from Monitor with the eye button, and the project page keeps its project-level student preview.

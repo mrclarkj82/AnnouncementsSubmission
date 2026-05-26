@@ -344,22 +344,116 @@ function normalizeShots(shots) {
           completed: Boolean(shot.completed),
           completedBy: safeText(shot.completedBy),
           completedAt: shot.completedAt || "",
-        },
+      },
+  );
+}
+
+function normalizeProjectGroups(groups, fallbackEmails = [], fallbackName = "Group 1") {
+  if (Array.isArray(groups) && groups.length) {
+    return groups.map((group, index) => {
+      const assignedStudentEmails = Array.isArray(group.assignedStudentEmails)
+        ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+        : splitEmails(group.assignedStudents || "");
+      return {
+        id: group.id || makeId("group"),
+        name: safeText(group.name) || `Group ${index + 1}`,
+        assignedStudentEmails,
+        assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+      };
+    });
+  }
+
+  const assignedStudentEmails = fallbackEmails.map(normalizeEmail).filter(Boolean);
+  return [
+    {
+      id: makeId("group"),
+      name: safeText(fallbackName) || "Group 1",
+      assignedStudentEmails,
+      assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+    },
+  ];
+}
+
+function groupStudentEmails(groups) {
+  return [
+    ...new Set(
+      normalizeProjectGroups(groups)
+        .flatMap((group) => group.assignedStudentEmails)
+        .map(normalizeEmail)
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function projectGroupLabel(project) {
+  const groups = normalizeProjectGroups(
+    project?.groups,
+    project?.assignedStudentEmails || [],
+    project?.groupName || "Production Group",
+  );
+  if (groups.length === 1) return groups[0].name;
+  return `${groups.length} groups`;
+}
+
+function newGroupDraft(index = 1) {
+  return {
+    id: makeId("group"),
+    name: `Group ${index}`,
+    assignedStudents: "",
+  };
+}
+
+function projectGroupDrafts(project) {
+  return normalizeProjectGroups(
+    project?.groups,
+    project?.assignedStudentEmails || [],
+    project?.groupName || "Group 1",
+  ).map((group) => ({
+    id: group.id || makeId("group"),
+    name: group.name,
+    assignedStudents: group.assignedStudentEmails.join(", "),
+  }));
+}
+
+function serializeGroupDrafts(groupDrafts) {
+  return (Array.isArray(groupDrafts) && groupDrafts.length ? groupDrafts : [newGroupDraft(1)]).map(
+    (group, index) => {
+      const assignedStudentEmails = splitEmails(group.assignedStudents || "");
+      return {
+        id: group.id || makeId("group"),
+        name: safeText(group.name) || `Group ${index + 1}`,
+        assignedStudentEmails,
+        assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+      };
+    },
   );
 }
 
 function cleanProject(project) {
+  const fallbackEmails = Array.isArray(project?.assignedStudentEmails)
+    ? project.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+    : [];
+  const groups = normalizeProjectGroups(
+    project?.groups,
+    fallbackEmails,
+    project?.groupName || "Production Group",
+  );
+  const assignedStudentEmails = [
+    ...new Set([
+      ...fallbackEmails,
+      ...groups.flatMap((group) => group.assignedStudentEmails),
+    ]),
+  ];
   return {
     ...project,
     periodId: safeText(project?.periodId),
     periodName: safeText(project?.periodName),
     courseName: safeText(project?.courseName),
+    groups,
     checklistItems: normalizeChecklist(project?.checklistItems || []),
     scriptSections: normalizeScriptSections(project?.scriptSections || []),
     shotList: normalizeShots(project?.shotList || []),
-    assignedStudentEmails: Array.isArray(project?.assignedStudentEmails)
-      ? project.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
-      : [],
+    assignedStudentEmails,
   };
 }
 
@@ -1012,6 +1106,7 @@ function MonitorDashboard({
   enrollments,
   selectedPeriodId,
   setSelectedPeriodId,
+  onPreviewPeriod,
 }) {
   const [interestIndex, setInterestIndex] = useState(0);
   const activePeriods = periods.filter((period) => period.active && !period.archived);
@@ -1071,11 +1166,22 @@ function MonitorDashboard({
         </label>
         ${selectedPeriod
           ? html`
-              <p className="mt-3 text-sm text-slate-400">
-                Showing ${selectedEnrollments.length} enrolled student${selectedEnrollments.length === 1 ? "" : "s"}
-                and ${activeProjects.length} active project${activeProjects.length === 1 ? "" : "s"} for
-                <span className="font-black text-white">${selectedPeriod.periodName}</span>.
-              </p>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-slate-400">
+                  Showing ${selectedEnrollments.length} enrolled student${selectedEnrollments.length === 1 ? "" : "s"}
+                  and ${activeProjects.length} active project${activeProjects.length === 1 ? "" : "s"} for
+                  <span className="font-black text-white">${selectedPeriod.periodName}</span>.
+                </p>
+                <button
+                  type="button"
+                  aria-label=${`Preview ${selectedPeriod.periodName} as student`}
+                  title=${`Preview ${selectedPeriod.periodName} as student`}
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-lens ring-1 ring-lens/30 transition hover:bg-slate-800"
+                  onClick=${() => onPreviewPeriod(selectedPeriod.id)}
+                >
+                  <${Eye} size=${18} />
+                </button>
+              </div>
             `
           : html`<p className="mt-3 text-sm text-slate-400">Choose a period to show only that class.</p>`}
       </div>
@@ -1124,7 +1230,7 @@ function ProjectMonitorCard({ project, enrollments, profileByEmail, interestInde
     <article className="vp-panel vp-fade rounded-3xl p-4" style=${progressTone(progress.percent)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">${project.groupName || "Production crew"}</p>
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">${projectGroupLabel(project)}</p>
           <h2 className="mt-1 truncate text-xl font-black text-white">${project.title}</h2>
           <p className="mt-1 text-sm text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
         </div>
@@ -1499,21 +1605,34 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
 
 function ProjectCreateForm({ profile, periods, setToast }) {
   const activePeriods = periods.filter((period) => period.active && !period.archived);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     title: "",
     objective: "",
     dueDate: todayISO(),
     periodId: "",
-    groupName: "",
-    assignedStudents: "",
+    groups: [newGroupDraft(1)],
     assignedTeacherEmail: profile.email,
     teacherNotes: "",
-    groupMode: true,
-  });
+  }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const updateGroup = (groupId, field, value) =>
+    setForm((current) => ({
+      ...current,
+      groups: current.groups.map((group) => (group.id === groupId ? { ...group, [field]: value } : group)),
+    }));
+  const addGroup = () =>
+    setForm((current) => ({
+      ...current,
+      groups: [...current.groups, newGroupDraft(current.groups.length + 1)],
+    }));
+  const removeGroup = (groupId) =>
+    setForm((current) => ({
+      ...current,
+      groups: current.groups.length > 1 ? current.groups.filter((group) => group.id !== groupId) : current.groups,
+    }));
 
   useEffect(() => {
     if (!activePeriods.length) return;
@@ -1528,7 +1647,8 @@ function ProjectCreateForm({ profile, periods, setToast }) {
     event.preventDefault();
     setError("");
     const selectedPeriod = activePeriods.find((period) => period.id === form.periodId);
-    const assignedStudentEmails = splitEmails(form.assignedStudents);
+    const groups = serializeGroupDrafts(form.groups);
+    const assignedStudentEmails = groupStudentEmails(groups);
     const assignedTeacherEmail = normalizeEmail(selectedPeriod?.teacherEmail || profile.email);
 
     if (!safeText(form.title) || !safeText(form.objective)) {
@@ -1558,8 +1678,9 @@ function ProjectCreateForm({ profile, periods, setToast }) {
         periodId: selectedPeriod.id,
         periodName: selectedPeriod.periodName,
         courseName: selectedPeriod.courseName || "",
-        groupName: safeText(form.groupName) || selectedPeriod.periodName,
-        groupMode: Boolean(form.groupMode),
+        groupName: projectGroupLabel({ groups, groupName: selectedPeriod.periodName }),
+        groupMode: groups.length > 1,
+        groups,
         assignedStudentEmails,
         assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
         teacherId: selectedPeriod.teacherId || profile.uid,
@@ -1588,11 +1709,9 @@ function ProjectCreateForm({ profile, periods, setToast }) {
         objective: "",
         dueDate: todayISO(),
         periodId: activePeriods[0]?.id || "",
-        groupName: "",
-        assignedStudents: "",
+        groups: [newGroupDraft(1)],
         assignedTeacherEmail: profile.email,
         teacherNotes: "",
-        groupMode: true,
       });
       setToast("Production project created");
     } catch (submitError) {
@@ -1645,18 +1764,52 @@ function ProjectCreateForm({ profile, periods, setToast }) {
           Due date
           <${TextInput} type="date" value=${form.dueDate} onInput=${(event) => update("dueDate", event.currentTarget.value)} />
         </label>
-        <label className="grid gap-1 text-sm font-bold text-slate-300">
-          Group name
-          <${TextInput} value=${form.groupName} onInput=${(event) => update("groupName", event.currentTarget.value)} placeholder="Period 4 Crew A" />
-        </label>
-        <label className="grid gap-1 text-sm font-bold text-slate-300">
-          Assigned student emails (optional)
-          <${TextInput} value=${form.assignedStudents} onInput=${(event) => update("assignedStudents", event.currentTarget.value)} placeholder="student@student.doralacademynv.org" />
-        </label>
-        <label className="flex items-center gap-3 rounded-2xl bg-slate-950/40 p-3 text-sm font-bold text-slate-300 ring-1 ring-slate-700/70">
-          <input type="checkbox" checked=${form.groupMode} onChange=${(event) => update("groupMode", event.currentTarget.checked)} />
-          Group mode
-        </label>
+        <div className="md:col-span-2 rounded-2xl bg-slate-950/35 p-3 ring-1 ring-slate-700/70">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="font-black text-white">Project groups</h3>
+              <p className="text-sm text-slate-400">Create as many crews as this period needs.</p>
+            </div>
+            <${Button} icon=${Plus} type="button" variant="secondary" onClick=${addGroup}>
+              Add group
+            </${Button}>
+          </div>
+          <div className="grid gap-3">
+            ${form.groups.map(
+              (group, index) => html`
+                <article key=${group.id} className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
+                  <div className="grid gap-3 md:grid-cols-[1fr_2fr_auto] md:items-end">
+                    <label className="grid gap-1 text-sm font-bold text-slate-300">
+                      Group ${index + 1}
+                      <${TextInput}
+                        value=${group.name}
+                        onInput=${(event) => updateGroup(group.id, "name", event.currentTarget.value)}
+                        placeholder=${`Group ${index + 1}`}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-sm font-bold text-slate-300">
+                      Student emails
+                      <${TextInput}
+                        value=${group.assignedStudents}
+                        onInput=${(event) => updateGroup(group.id, "assignedStudents", event.currentTarget.value)}
+                        placeholder="student@student.doralacademynv.org, another@student.doralacademynv.org"
+                      />
+                    </label>
+                    <${Button}
+                      icon=${Trash2}
+                      type="button"
+                      variant="ghost"
+                      disabled=${form.groups.length === 1}
+                      onClick=${() => removeGroup(group.id)}
+                    >
+                      Delete
+                    </${Button}>
+                  </div>
+                </article>
+              `,
+            )}
+          </div>
+        </div>
         <label className="grid gap-1 text-sm font-bold text-slate-300 md:col-span-2">
           Objective
           <${Textarea} value=${form.objective} onInput=${(event) => update("objective", event.currentTarget.value)} placeholder="What students need to produce and capture." />
@@ -1676,17 +1829,64 @@ function ProjectCreateForm({ profile, periods, setToast }) {
 
 function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
   const progress = projectProgress(project);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [groupDrafts, setGroupDrafts] = useState(() => projectGroupDrafts(project));
+  const [groupError, setGroupError] = useState("");
+  const groupSignature = JSON.stringify(project.groups || []);
+
+  useEffect(() => {
+    setGroupDrafts(projectGroupDrafts(project));
+    setGroupError("");
+  }, [project.id, groupSignature, (project.assignedStudentEmails || []).join("|"), project.groupName]);
+
+  const updateGroupDraft = (groupId, field, value) =>
+    setGroupDrafts((current) =>
+      current.map((group) => (group.id === groupId ? { ...group, [field]: value } : group)),
+    );
+  const addGroupDraft = () =>
+    setGroupDrafts((current) => [...current, newGroupDraft(current.length + 1)]);
+  const removeGroupDraft = (groupId) =>
+    setGroupDrafts((current) => (current.length > 1 ? current.filter((group) => group.id !== groupId) : current));
 
   const updateStatus = async (status) => {
-    setBusy(true);
+    setBusy(`status-${status}`);
     try {
       await saveProjectPatch(project, profile, { status }, `Marked project ${status}`);
       setToast(`Project marked ${status}`);
     } catch (statusError) {
       setToast(statusError.message);
     } finally {
-      setBusy(false);
+      setBusy("");
+    }
+  };
+
+  const saveGroups = async () => {
+    setGroupError("");
+    const groups = serializeGroupDrafts(groupDrafts);
+    const assignedStudentEmails = groupStudentEmails(groups);
+    if (assignedStudentEmails.some((email) => !isAllowedDoralEmail(email))) {
+      setGroupError("Student emails must use Doral accounts.");
+      return;
+    }
+    setBusy("groups");
+    try {
+      await saveProjectPatch(
+        project,
+        profile,
+        {
+          groups,
+          groupName: projectGroupLabel({ groups, groupName: project.periodName || "Production Group" }),
+          groupMode: groups.length > 1,
+          assignedStudentEmails,
+          assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+        },
+        "Updated project groups",
+      );
+      setToast("Project groups saved");
+    } catch (saveError) {
+      setGroupError(saveError.message);
+    } finally {
+      setBusy("");
     }
   };
 
@@ -1695,7 +1895,7 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-lg font-black text-white">${project.title}</h3>
-          <p className="mt-1 text-sm text-slate-400">${project.groupName} - Due ${toDateLabel(project.dueDate)}</p>
+          <p className="mt-1 text-sm text-slate-400">${projectGroupLabel(project)} - Due ${toDateLabel(project.dueDate)}</p>
         </div>
         <${Badge} icon=${Gauge}>${progress.percent}%</${Badge}>
       </div>
@@ -1708,6 +1908,57 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
       </div>
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-950/70">
         <div className="h-full rounded-full bg-lens" style=${{ width: `${progress.percent}%` }}></div>
+      </div>
+      <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h4 className="font-black text-white">Groups</h4>
+            <p className="text-sm text-slate-400">Add, edit, or delete the crews working this project.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <${Button} icon=${Plus} type="button" variant="ghost" onClick=${addGroupDraft}>
+              Add group
+            </${Button}>
+            <${Button} icon=${Save} type="button" variant="secondary" disabled=${busy === "groups"} onClick=${saveGroups}>
+              ${busy === "groups" ? "Saving..." : "Save groups"}
+            </${Button}>
+          </div>
+        </div>
+        <div className="grid gap-3">
+          ${groupDrafts.map(
+            (group, index) => html`
+              <article key=${group.id} className="rounded-2xl border border-slate-700/70 bg-slate-950/45 p-3">
+                <div className="grid gap-3 md:grid-cols-[1fr_2fr_auto] md:items-end">
+                  <label className="grid gap-1 text-sm font-bold text-slate-300">
+                    Group ${index + 1}
+                    <${TextInput}
+                      value=${group.name}
+                      onInput=${(event) => updateGroupDraft(group.id, "name", event.currentTarget.value)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-bold text-slate-300">
+                    Student emails
+                    <${TextInput}
+                      value=${group.assignedStudents}
+                      onInput=${(event) => updateGroupDraft(group.id, "assignedStudents", event.currentTarget.value)}
+                      placeholder="student@student.doralacademynv.org"
+                    />
+                  </label>
+                  <${Button}
+                    icon=${Trash2}
+                    type="button"
+                    variant="ghost"
+                    disabled=${groupDrafts.length === 1}
+                    onClick=${() => removeGroupDraft(group.id)}
+                  >
+                    Delete
+                  </${Button}>
+                </div>
+              </article>
+            `,
+          )}
+        </div>
+        ${groupError ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${groupError}</p>` : null}
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         ${isVideoAdmin(profile)
@@ -1728,7 +1979,7 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
               key=${status}
               type="button"
               variant=${project.status === status ? "primary" : "ghost"}
-              disabled=${busy}
+              disabled=${Boolean(busy)}
               onClick=${() => updateStatus(status)}
             >
               ${status}
@@ -1935,6 +2186,80 @@ function AdminStudentPreview({ profile, project, setToast, setKioskActive, onClo
   `;
 }
 
+function StaffStudentPeriodPreview({ profile, period, projects, setToast, setKioskActive, onClose }) {
+  const activeProjects = projects.filter((project) => project.status !== "archived");
+  const [selectedProjectId, setSelectedProjectId] = useState(activeProjects[0]?.id || "");
+
+  useEffect(() => {
+    if (!activeProjects.length) {
+      setSelectedProjectId("");
+      return;
+    }
+    if (!activeProjects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(activeProjects[0].id);
+    }
+  }, [activeProjects.map((project) => project.id).join("|"), selectedProjectId]);
+
+  const selectedProject = activeProjects.find((project) => project.id === selectedProjectId);
+
+  return html`
+    <section className="space-y-4">
+      <div className="vp-panel rounded-3xl border border-warning/35 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-warning">Student Preview</p>
+            <h1 className="mt-1 text-2xl font-black text-white">${period.periodName}</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+              Preview the selected period exactly from the student workflow area while staying signed in as staff.
+            </p>
+          </div>
+          <${Button} icon=${X} variant="ghost" onClick=${onClose}>Exit preview</${Button}>
+        </div>
+      </div>
+
+      ${activeProjects.length > 1
+        ? html`
+            <div className="vp-panel rounded-3xl p-4">
+              <label className="grid gap-2 text-sm font-bold text-slate-300">
+                Preview project
+                <${Select}
+                  value=${selectedProjectId}
+                  onChange=${(event) => setSelectedProjectId(event.currentTarget.value)}
+                >
+                  ${activeProjects.map(
+                    (project) => html`
+                      <option key=${project.id} value=${project.id}>
+                        ${project.title} - ${projectGroupLabel(project)}
+                      </option>
+                    `,
+                  )}
+                </${Select}>
+              </label>
+            </div>
+          `
+        : null}
+
+      ${selectedProject
+        ? html`
+            <${FilmingWorkspace}
+              profile=${profile}
+              project=${selectedProject}
+              setToast=${setToast}
+              setKioskActive=${setKioskActive}
+              previewMode=${true}
+            />
+          `
+        : html`
+            <${EmptyState}
+              icon=${Camera}
+              title="No active project to preview"
+              body="Create a project for this period, then use the monitor preview again."
+            />
+          `}
+    </section>
+  `;
+}
+
 function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewMode = false }) {
   const [filmingMode, setFilmingMode] = useState(false);
   const [focusWarning, setFocusWarning] = useState(false);
@@ -2069,9 +2394,9 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
             <div className="rounded-3xl border border-warning/35 bg-warning/10 p-4 text-sm leading-6 text-amber-100">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="font-black text-white">Admin preview mode</p>
+                  <p className="font-black text-white">Student preview mode</p>
                   <p>
-                    Student pages are being shown for testing while writes are still saved under your admin account.
+                    Student pages are being shown for testing while writes are still saved under your staff account.
                   </p>
                 </div>
                 <${Badge} icon=${Eye} className="text-amber-100">Preview</${Badge}>
@@ -2120,7 +2445,7 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
           </div>
           <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-slate-700/70">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Group</p>
-            <p className="mt-1 font-black text-white">${project.groupName}</p>
+            <p className="mt-1 font-black text-white">${projectGroupLabel(project)}</p>
           </div>
           <label className="grid gap-1 text-xs font-black uppercase tracking-[0.18em] text-slate-500">
             Status
@@ -2141,6 +2466,28 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
             </${Select}>
           </label>
         </div>
+
+        ${project.groups?.length
+          ? html`
+              <div className="mt-4 rounded-2xl bg-slate-950/35 p-3 ring-1 ring-slate-700/70">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Project groups</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  ${project.groups.map(
+                    (group) => html`
+                      <div key=${group.id} className="rounded-xl bg-slate-950/45 p-3">
+                        <p className="font-black text-white">${group.name}</p>
+                        <p className="mt-1 text-sm text-slate-400">
+                          ${group.assignedStudentEmails.length
+                            ? group.assignedStudentEmails.map(titleFromEmail).join(", ")
+                            : "No students assigned yet"}
+                        </p>
+                      </div>
+                    `,
+                  )}
+                </div>
+              </div>
+            `
+          : null}
 
         <div className="mt-4">
           <div className="mb-2 flex items-center justify-between text-sm font-black text-white">
@@ -2699,6 +3046,7 @@ function VideoProductionApp() {
   const { user, profile, loading, error } = useVideoAuthProfile();
   const [view, setView] = useState("");
   const [previewProjectId, setPreviewProjectId] = useState("");
+  const [previewPeriodId, setPreviewPeriodId] = useState("");
   const [selectedPeriodId, setSelectedPeriodIdState] = useState(() =>
     window.sessionStorage.getItem(PERIOD_SESSION_KEY) || "",
   );
@@ -2733,6 +3081,10 @@ function VideoProductionApp() {
     if (!isVideoAdmin(profile)) setPreviewProjectId("");
   }, [profile?.role]);
 
+  useEffect(() => {
+    if (!isVideoAdmin(profile) && !isVideoTeacher(profile)) setPreviewPeriodId("");
+  }, [profile?.role]);
+
   const activeTeacherPeriods = periods.filter((period) => period.active && !period.archived);
 
   useEffect(() => {
@@ -2765,13 +3117,32 @@ function VideoProductionApp() {
   const previewProject = isVideoAdmin(profile)
     ? projects.find((project) => project.id === previewProjectId)
     : null;
+  const previewPeriod =
+    isVideoAdmin(profile) || isVideoTeacher(profile)
+      ? periods.find((period) => period.id === previewPeriodId)
+      : null;
+  const previewPeriodProjects = previewPeriod
+    ? projects.filter((project) => project.periodId === previewPeriod.id)
+    : [];
   const selectView = (nextView) => {
     setPreviewProjectId("");
+    setPreviewPeriodId("");
     setView(nextView);
   };
   let content = null;
 
-  if (previewProject) {
+  if (previewPeriod) {
+    content = html`
+      <${StaffStudentPeriodPreview}
+        profile=${profile}
+        period=${previewPeriod}
+        projects=${previewPeriodProjects}
+        setToast=${setToast}
+        setKioskActive=${setKioskActive}
+        onClose=${() => setPreviewPeriodId("")}
+      />
+    `;
+  } else if (previewProject) {
     content = html`
       <${AdminStudentPreview}
         profile=${profile}
@@ -2808,6 +3179,11 @@ function VideoProductionApp() {
         enrollments=${enrollments}
         selectedPeriodId=${selectedPeriodId}
         setSelectedPeriodId=${setSelectedPeriodId}
+        onPreviewPeriod=${(periodId) => {
+          setPreviewProjectId("");
+          setPreviewPeriodId(periodId);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
       />
     `;
   } else if (activeView === "periods" && (isVideoTeacher(profile) || isVideoAdmin(profile))) {
@@ -2830,6 +3206,7 @@ function VideoProductionApp() {
         error=${projectsError}
         setToast=${setToast}
         onPreviewStudent=${(projectId) => {
+          setPreviewPeriodId("");
           setPreviewProjectId(projectId);
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
