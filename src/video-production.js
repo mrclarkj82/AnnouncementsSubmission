@@ -563,6 +563,27 @@ function cleanPeriod(period) {
   };
 }
 
+function canonicalEnrollmentId(periodId, studentEmail) {
+  return `${safeText(periodId)}_${normalizeEmail(studentEmail)}`;
+}
+
+function activeEnrollmentsForPeriod(enrollments, periodId) {
+  const seen = new Set();
+  return enrollments
+    .filter((enrollment) => enrollment.active !== false && enrollment.periodId === periodId)
+    .filter((enrollment) => {
+      const key = normalizeEmail(enrollment.studentEmail || enrollment.studentId || enrollment.id);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) =>
+      safeText(a.studentName || titleFromEmail(a.studentEmail)).localeCompare(
+        safeText(b.studentName || titleFromEmail(b.studentEmail)),
+      ),
+    );
+}
+
 function usePeriods(profile) {
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1114,9 +1135,7 @@ function MonitorDashboard({
   const activeProjects = projects
     .filter((project) => project.status !== "archived")
     .filter((project) => !selectedPeriodId || project.periodId === selectedPeriodId);
-  const selectedEnrollments = enrollments.filter(
-    (enrollment) => enrollment.active !== false && enrollment.periodId === selectedPeriodId,
-  );
+  const selectedEnrollments = activeEnrollmentsForPeriod(enrollments, selectedPeriodId);
   const profileByEmail = useMemo(() => {
     const map = new Map();
     studentProfiles.forEach((profile) => map.set(normalizeEmail(profile.email || profile.id), profile));
@@ -1298,7 +1317,7 @@ function PeriodManager({ profile, periods, enrollments, loading, error, setToast
                       key=${period.id}
                       profile=${profile}
                       period=${period}
-                      enrollments=${enrollments.filter((enrollment) => enrollment.periodId === period.id)}
+                      enrollments=${activeEnrollmentsForPeriod(enrollments, period.id)}
                       setToast=${setToast}
                     />
                   `,
@@ -1401,7 +1420,7 @@ function PeriodCreateForm({ profile, setToast }) {
 
 function PeriodCard({ profile, period, enrollments, setToast }) {
   const [busy, setBusy] = useState("");
-  const activeEnrollments = enrollments.filter((enrollment) => enrollment.active !== false);
+  const activeEnrollments = activeEnrollmentsForPeriod(enrollments, period.id);
 
   const regenerateCode = async () => {
     if (!window.confirm(`Regenerate the join code for ${period.periodName}? The old code will stop working.`)) return;
@@ -2933,9 +2952,7 @@ function ManualPeriodEnrollmentForm({ profile, periods, enrollments, setToast })
 
   const selectedPeriod = activePeriods.find((period) => period.id === form.periodId);
   const selectedEnrollments = selectedPeriod
-    ? enrollments.filter(
-        (enrollment) => enrollment.periodId === selectedPeriod.id && enrollment.active !== false,
-      )
+    ? activeEnrollmentsForPeriod(enrollments, selectedPeriod.id)
     : [];
 
   const addStudentToPeriod = async (event) => {
@@ -2956,28 +2973,26 @@ function ManualPeriodEnrollmentForm({ profile, periods, enrollments, setToast })
         enrollment.periodId === selectedPeriod.id &&
         normalizeEmail(enrollment.studentEmail) === studentEmail,
     );
-    if (existingEnrollment?.active !== false) {
-      setFormError(`${studentEmail} is already active in ${selectedPeriod.periodName}.`);
-      return;
-    }
-
     setBusy(true);
     try {
-      const enrollmentId = existingEnrollment?.id || `${selectedPeriod.id}_${studentEmail}`;
+      const enrollmentId = canonicalEnrollmentId(selectedPeriod.id, studentEmail);
       await setDoc(
         doc(db, "periodEnrollments", enrollmentId),
         {
           enrollmentId,
-          studentId: existingEnrollment?.studentId || studentEmail,
+          studentId: studentEmail,
           studentEmail,
-          studentName: safeText(form.studentName) || titleFromEmail(studentEmail),
+          studentName:
+            safeText(form.studentName) ||
+            safeText(existingEnrollment?.studentName) ||
+            titleFromEmail(studentEmail),
           periodId: selectedPeriod.id,
           periodName: selectedPeriod.periodName,
           courseName: selectedPeriod.courseName || "",
           teacherId: selectedPeriod.teacherId || "",
           teacherEmail: selectedPeriod.teacherEmail || "",
           teacherName: selectedPeriod.teacherName || "",
-          joinCodeLowercase: existingEnrollment?.joinCodeLowercase || "manual",
+          joinCodeLowercase: "manual",
           active: true,
           joinedAt: serverTimestamp(),
           removedAt: "",
@@ -2999,7 +3014,11 @@ function ManualPeriodEnrollmentForm({ profile, periods, enrollments, setToast })
       }
 
       setForm({ email: "", studentName: "", periodId: selectedPeriod.id });
-      setToast(`${studentEmail} added to ${selectedPeriod.periodName}`);
+      setToast(
+        existingEnrollment?.active !== false
+          ? `${studentEmail} is active in ${selectedPeriod.periodName}; roster refreshed`
+          : `${studentEmail} added to ${selectedPeriod.periodName}`,
+      );
     } catch (addError) {
       setFormError(addError.message);
     } finally {
@@ -3082,8 +3101,9 @@ function ManualPeriodEnrollmentForm({ profile, periods, enrollments, setToast })
                     <div className="mt-3 flex flex-wrap gap-2">
                       ${selectedEnrollments.slice(0, 10).map(
                         (enrollment) => html`
-                          <span key=${enrollment.id} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-slate-300 ring-1 ring-slate-700/70">
-                            ${enrollment.studentName || titleFromEmail(enrollment.studentEmail)}
+                          <span key=${enrollment.id} className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-black text-slate-300 ring-1 ring-slate-700/70">
+                            <span className="block text-white">${enrollment.studentName || titleFromEmail(enrollment.studentEmail)}</span>
+                            <span className="block font-semibold text-slate-500">${enrollment.studentEmail}</span>
                           </span>
                         `,
                       )}
