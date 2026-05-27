@@ -2276,6 +2276,7 @@ function TeleprompterMode({ profile }) {
   const [speed, setSpeed] = useState(42);
   const [fontSize, setFontSize] = useState(58);
   const [theme, setTheme] = useState("dark");
+  const [mirrored, setMirrored] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const stageRef = useRef(null);
   const scrollRef = useRef(null);
@@ -2472,6 +2473,15 @@ function TeleprompterMode({ profile }) {
               >
                 ${lightMode ? "Dark" : "Light"}
               </${Button}>
+              <${Button}
+                icon=${RefreshCcw}
+                variant=${mirrored ? "primary" : subtleButtonVariant}
+                aria-pressed=${mirrored}
+                title=${mirrored ? "Turn mirrored text off" : "Mirror teleprompter text"}
+                onClick=${() => setMirrored((current) => !current)}
+              >
+                Mirror
+              </${Button}>
               <${Button} icon=${Maximize} variant="secondary" onClick=${toggleFullscreen}>
                 ${isFullscreen ? "Exit" : "Full"}
               </${Button}>
@@ -2497,7 +2507,12 @@ function TeleprompterMode({ profile }) {
                       : html`
                           <article
                             className=${classNames("pb-[45vh]", lightMode ? "text-slate-950" : "text-white")}
-                            style=${{ fontSize: `${fontSize}px`, lineHeight: 1.42 }}
+                            style=${{
+                              fontSize: `${fontSize}px`,
+                              lineHeight: 1.42,
+                              transform: mirrored ? "scaleX(-1)" : "none",
+                              transformOrigin: "center top",
+                            }}
                           >
                             <header className="mb-16 border-b pb-8 ${lightMode ? "border-slate-300" : "border-slate-700"}">
                               <p className="text-[0.32em] font-black uppercase tracking-[0.22em] text-teal-400">

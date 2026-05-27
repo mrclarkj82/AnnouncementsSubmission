@@ -47,6 +47,7 @@ import {
   auth,
   collection,
   db,
+  deleteDoc,
   doc,
   getDoc,
   onAuthStateChanged,
@@ -1879,6 +1880,24 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
     }
   };
 
+  const deleteProject = async () => {
+    const confirmed = window.confirm(
+      `Delete "${project.title}" permanently? This removes the project from Video Production Studio for everyone.`,
+    );
+    if (!confirmed) return;
+
+    setBusy("delete");
+    try {
+      await deleteDoc(doc(db, "videoProjects", project.id));
+      await addActivity(project, profile, "Deleted project");
+      setToast("Project deleted");
+    } catch (deleteError) {
+      setToast(deleteError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
   const saveGroups = async () => {
     setGroupError("");
     const groups = serializeGroupDrafts(groupDrafts);
@@ -1989,6 +2008,15 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
                 onClick=${() => onPreviewStudent(project.id)}
               >
                 Preview as Student
+              </${Button}>
+              <${Button}
+                icon=${Trash2}
+                type="button"
+                variant="danger"
+                disabled=${Boolean(busy)}
+                onClick=${deleteProject}
+              >
+                Delete Project
               </${Button}>
             `
           : null}
