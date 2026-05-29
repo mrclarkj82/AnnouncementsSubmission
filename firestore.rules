@@ -308,7 +308,10 @@ service cloud.firestore {
           "teacherId",
           "teacherEmail",
           "teacherName",
+          "name",
+          "className",
           "periodName",
+          "periodNumber",
           "courseName",
           "joinCode",
           "joinCodeLowercase",
@@ -316,6 +319,9 @@ service cloud.firestore {
           "archived",
           "archivedAt",
           "archivedBy",
+          "seededRoster",
+          "seededRosterBatch",
+          "createdBySeedScript",
           "createdAt",
           "updatedAt"
         ])
@@ -330,6 +336,18 @@ service cloud.firestore {
         && request.resource.data.active is bool
         && request.resource.data.archived is bool
         && (
+          !request.resource.data.keys().hasAny(["name"])
+          || request.resource.data.name is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["className"])
+          || request.resource.data.className is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["periodNumber"])
+          || request.resource.data.periodNumber is number
+        )
+        && (
           !request.resource.data.keys().hasAny(["archivedAt"])
           || request.resource.data.archivedAt is timestamp
           || request.resource.data.archivedAt is string
@@ -337,6 +355,18 @@ service cloud.firestore {
         && (
           !request.resource.data.keys().hasAny(["archivedBy"])
           || request.resource.data.archivedBy is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["seededRoster"])
+          || request.resource.data.seededRoster is bool
+        )
+        && (
+          !request.resource.data.keys().hasAny(["seededRosterBatch"])
+          || request.resource.data.seededRosterBatch is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["createdBySeedScript"])
+          || request.resource.data.createdBySeedScript is bool
         );
     }
 
@@ -351,6 +381,9 @@ service cloud.firestore {
           "joinCode",
           "joinCodeLowercase",
           "active",
+          "seededRoster",
+          "seededRosterBatch",
+          "createdBySeedScript",
           "createdAt",
           "updatedAt"
         ])
@@ -361,13 +394,26 @@ service cloud.firestore {
         && request.resource.data.periodName is string
         && request.resource.data.courseName is string
         && request.resource.data.joinCode is string
-        && request.resource.data.active is bool;
+        && request.resource.data.active is bool
+        && (
+          !request.resource.data.keys().hasAny(["seededRoster"])
+          || request.resource.data.seededRoster is bool
+        )
+        && (
+          !request.resource.data.keys().hasAny(["seededRosterBatch"])
+          || request.resource.data.seededRosterBatch is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["createdBySeedScript"])
+          || request.resource.data.createdBySeedScript is bool
+        );
     }
 
     function validPeriodEnrollment(enrollmentId) {
       return request.resource.data.keys().hasOnly([
           "enrollmentId",
           "studentId",
+          "seededStudentId",
           "studentEmail",
           "studentName",
           "periodId",
@@ -404,12 +450,23 @@ service cloud.firestore {
           "teacherName",
           "joinCodeLowercase",
           "active",
+          "seededRoster",
+          "seededRosterBatch",
+          "createdBySeedScript",
           "joinedAt",
           "removedAt"
         ])
         && request.resource.data.enrollmentId == enrollmentId
         && enrollmentId == request.resource.data.periodId + "_" + request.resource.data.studentEmail
-        && request.resource.data.studentId == request.resource.data.studentEmail
+        && (
+          request.resource.data.studentId == request.resource.data.studentEmail
+          || (
+            request.resource.data.createdBySeedScript == true
+            && request.resource.data.seededRoster == true
+            && request.resource.data.seededStudentId is string
+            && request.resource.data.studentId == request.resource.data.seededStudentId
+          )
+        )
         && request.resource.data.studentEmail is string
         && request.resource.data.studentEmail == request.resource.data.studentEmail.lower()
         && request.resource.data.studentEmail.matches('^[^@]+@student\\.doralacademynv\\.org$')
@@ -422,7 +479,19 @@ service cloud.firestore {
         && request.resource.data.teacherName is string
         && request.resource.data.joinCodeLowercase == "manual"
         && request.resource.data.active == true
-        && request.resource.data.removedAt == "";
+        && request.resource.data.removedAt == ""
+        && (
+          !request.resource.data.keys().hasAny(["seededRoster"])
+          || request.resource.data.seededRoster is bool
+        )
+        && (
+          !request.resource.data.keys().hasAny(["seededRosterBatch"])
+          || request.resource.data.seededRosterBatch is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["createdBySeedScript"])
+          || request.resource.data.createdBySeedScript is bool
+        );
     }
 
     match /authorizedUsers/{userEmail} {

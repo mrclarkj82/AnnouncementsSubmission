@@ -200,6 +200,124 @@ const DEMO_PERIODS = [
   },
 ];
 
+const DCC_ROSTER_BATCH = "dcc-practice-roster-2026";
+const DCC_PERIODS = [
+  {
+    number: 1,
+    periodName: "DCC - Period 1",
+    courseName: "DCC",
+    preferredJoinCode: "DCC-P1-4827",
+    students: [
+      ["Ava Martinez", "ava.martinez.dccp1@student.doralacademynv.org"],
+      ["Ethan Brooks", "ethan.brooks.dccp1@student.doralacademynv.org"],
+      ["Mia Johnson", "mia.johnson.dccp1@student.doralacademynv.org"],
+      ["Liam Carter", "liam.carter.dccp1@student.doralacademynv.org"],
+      ["Sophia Nguyen", "sophia.nguyen.dccp1@student.doralacademynv.org"],
+      ["Noah Bennett", "noah.bennett.dccp1@student.doralacademynv.org"],
+      ["Isabella Rivera", "isabella.rivera.dccp1@student.doralacademynv.org"],
+      ["Lucas Thompson", "lucas.thompson.dccp1@student.doralacademynv.org"],
+      ["Emma Rodriguez", "emma.rodriguez.dccp1@student.doralacademynv.org"],
+      ["Mason Clark", "mason.clark.dccp1@student.doralacademynv.org"],
+      ["Olivia Parker", "olivia.parker.dccp1@student.doralacademynv.org"],
+      ["Logan Phillips", "logan.phillips.dccp1@student.doralacademynv.org"],
+      ["Amelia Foster", "amelia.foster.dccp1@student.doralacademynv.org"],
+      ["Jackson Reed", "jackson.reed.dccp1@student.doralacademynv.org"],
+      ["Harper Collins", "harper.collins.dccp1@student.doralacademynv.org"],
+      ["Aiden Murphy", "aiden.murphy.dccp1@student.doralacademynv.org"],
+      ["Evelyn Sanders", "evelyn.sanders.dccp1@student.doralacademynv.org"],
+      ["Caleb Morgan", "caleb.morgan.dccp1@student.doralacademynv.org"],
+      ["Abigail Cooper", "abigail.cooper.dccp1@student.doralacademynv.org"],
+      ["Grayson Bell", "grayson.bell.dccp1@student.doralacademynv.org"],
+      ["Ella Ward", "ella.ward.dccp1@student.doralacademynv.org"],
+      ["Daniel Hayes", "daniel.hayes.dccp1@student.doralacademynv.org"],
+      ["Scarlett Powell", "scarlett.powell.dccp1@student.doralacademynv.org"],
+      ["Wyatt Bryant", "wyatt.bryant.dccp1@student.doralacademynv.org"],
+      ["Chloe Jenkins", "chloe.jenkins.dccp1@student.doralacademynv.org"],
+      ["Carter Simmons", "carter.simmons.dccp1@student.doralacademynv.org"],
+      ["Lily Coleman", "lily.coleman.dccp1@student.doralacademynv.org"],
+      ["Owen Russell", "owen.russell.dccp1@student.doralacademynv.org"],
+      ["Grace Perry", "grace.perry.dccp1@student.doralacademynv.org"],
+      ["Henry Price", "henry.price.dccp1@student.doralacademynv.org"],
+    ],
+  },
+  {
+    number: 2,
+    periodName: "DCC - Period 2",
+    courseName: "DCC",
+    preferredJoinCode: "DCC-P2-6394",
+    students: [
+      ["Zoey Anderson", "zoey.anderson.dccp2@student.doralacademynv.org"],
+      ["James Mitchell", "james.mitchell.dccp2@student.doralacademynv.org"],
+      ["Nora Sullivan", "nora.sullivan.dccp2@student.doralacademynv.org"],
+      ["Benjamin Torres", "benjamin.torres.dccp2@student.doralacademynv.org"],
+      ["Avery Ramirez", "avery.ramirez.dccp2@student.doralacademynv.org"],
+      ["Elijah Peterson", "elijah.peterson.dccp2@student.doralacademynv.org"],
+      ["Riley Flores", "riley.flores.dccp2@student.doralacademynv.org"],
+      ["Samuel Griffin", "samuel.griffin.dccp2@student.doralacademynv.org"],
+      ["Layla Hughes", "layla.hughes.dccp2@student.doralacademynv.org"],
+      ["Jacob Russell", "jacob.russell.dccp2@student.doralacademynv.org"],
+      ["Aria Diaz", "aria.diaz.dccp2@student.doralacademynv.org"],
+      ["Michael Jenkins", "michael.jenkins.dccp2@student.doralacademynv.org"],
+      ["Penelope Cook", "penelope.cook.dccp2@student.doralacademynv.org"],
+      ["Sebastian Cox", "sebastian.cox.dccp2@student.doralacademynv.org"],
+      ["Hannah Bell", "hannah.bell.dccp2@student.doralacademynv.org"],
+      ["Levi Alexander", "levi.alexander.dccp2@student.doralacademynv.org"],
+      ["Stella Butler", "stella.butler.dccp2@student.doralacademynv.org"],
+      ["Gabriel Wood", "gabriel.wood.dccp2@student.doralacademynv.org"],
+      ["Addison Kelly", "addison.kelly.dccp2@student.doralacademynv.org"],
+      ["Julian Brooks", "julian.brooks.dccp2@student.doralacademynv.org"],
+      ["Victoria Nelson", "victoria.nelson.dccp2@student.doralacademynv.org"],
+      ["Isaac Gray", "isaac.gray.dccp2@student.doralacademynv.org"],
+      ["Natalie Rivera", "natalie.rivera.dccp2@student.doralacademynv.org"],
+      ["Anthony Bennett", "anthony.bennett.dccp2@student.doralacademynv.org"],
+      ["Leah Stewart", "leah.stewart.dccp2@student.doralacademynv.org"],
+      ["Christopher Young", "christopher.young.dccp2@student.doralacademynv.org"],
+      ["Brooklyn Murphy", "brooklyn.murphy.dccp2@student.doralacademynv.org"],
+      ["Joshua Foster", "joshua.foster.dccp2@student.doralacademynv.org"],
+      ["Audrey Perez", "audrey.perez.dccp2@student.doralacademynv.org"],
+      ["Andrew Collins", "andrew.collins.dccp2@student.doralacademynv.org"],
+    ],
+  },
+  {
+    number: 3,
+    periodName: "DCC - Period 3",
+    courseName: "DCC",
+    preferredJoinCode: "DCC-P3-7158",
+    students: [
+      ["Madison Bryant", "madison.bryant.dccp3@student.doralacademynv.org"],
+      ["Dylan Ramirez", "dylan.ramirez.dccp3@student.doralacademynv.org"],
+      ["Savannah Morgan", "savannah.morgan.dccp3@student.doralacademynv.org"],
+      ["Nathan Ross", "nathan.ross.dccp3@student.doralacademynv.org"],
+      ["Skylar Bailey", "skylar.bailey.dccp3@student.doralacademynv.org"],
+      ["Christian Coleman", "christian.coleman.dccp3@student.doralacademynv.org"],
+      ["Lucy Henderson", "lucy.henderson.dccp3@student.doralacademynv.org"],
+      ["Jonathan Reed", "jonathan.reed.dccp3@student.doralacademynv.org"],
+      ["Claire Patterson", "claire.patterson.dccp3@student.doralacademynv.org"],
+      ["Cameron Watson", "cameron.watson.dccp3@student.doralacademynv.org"],
+      ["Paisley Simmons", "paisley.simmons.dccp3@student.doralacademynv.org"],
+      ["Thomas Ward", "thomas.ward.dccp3@student.doralacademynv.org"],
+      ["Ellie Barnes", "ellie.barnes.dccp3@student.doralacademynv.org"],
+      ["Aaron Powell", "aaron.powell.dccp3@student.doralacademynv.org"],
+      ["Violet Long", "violet.long.dccp3@student.doralacademynv.org"],
+      ["Connor Perry", "connor.perry.dccp3@student.doralacademynv.org"],
+      ["Mila Edwards", "mila.edwards.dccp3@student.doralacademynv.org"],
+      ["Ryan Butler", "ryan.butler.dccp3@student.doralacademynv.org"],
+      ["Hazel Flores", "hazel.flores.dccp3@student.doralacademynv.org"],
+      ["Luke Simmons", "luke.simmons.dccp3@student.doralacademynv.org"],
+      ["Elena Brooks", "elena.brooks.dccp3@student.doralacademynv.org"],
+      ["Hunter Stewart", "hunter.stewart.dccp3@student.doralacademynv.org"],
+      ["Maya Price", "maya.price.dccp3@student.doralacademynv.org"],
+      ["Jeremiah Cox", "jeremiah.cox.dccp3@student.doralacademynv.org"],
+      ["Sophie Kelly", "sophie.kelly.dccp3@student.doralacademynv.org"],
+      ["Adrian Gray", "adrian.gray.dccp3@student.doralacademynv.org"],
+      ["Bella Hughes", "bella.hughes.dccp3@student.doralacademynv.org"],
+      ["Nicholas Peterson", "nicholas.peterson.dccp3@student.doralacademynv.org"],
+      ["Kennedy Cook", "kennedy.cook.dccp3@student.doralacademynv.org"],
+      ["Easton Torres", "easton.torres.dccp3@student.doralacademynv.org"],
+    ],
+  },
+];
+
 function classNames(...values) {
   return values.filter(Boolean).join(" ");
 }
@@ -307,6 +425,28 @@ function demoJoinCode(profile, demoPeriod) {
 
 function demoStudentEmail(name, demoPeriod) {
   return `${slugFromName(name)}.p${demoPeriod.number}.demo${DORAL_STUDENT_DOMAIN}`;
+}
+
+function dccPeriodId(periodNumber) {
+  return `${DCC_ROSTER_BATCH}-p${periodNumber}`;
+}
+
+function dccSeededStudentId(periodNumber, index) {
+  return `dcc-p${periodNumber}-student-${String(index + 1).padStart(3, "0")}`;
+}
+
+async function resolveDccJoinCode(dccPeriod) {
+  const preferredCode = normalizeJoinCode(dccPeriod.preferredJoinCode);
+  const preferredSnapshot = await getDoc(doc(db, "periodJoinCodes", joinCodeLowercase(preferredCode)));
+  const periodId = dccPeriodId(dccPeriod.number);
+  if (!preferredSnapshot.exists() || preferredSnapshot.data().periodId === periodId) return preferredCode;
+
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const joinCode = `DCC-P${dccPeriod.number}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const codeSnapshot = await getDoc(doc(db, "periodJoinCodes", joinCodeLowercase(joinCode)));
+    if (!codeSnapshot.exists()) return joinCode;
+  }
+  throw new Error(`Could not generate an available DCC Period ${dccPeriod.number} join code.`);
 }
 
 function isPeriodArchived(period) {
@@ -1587,10 +1727,202 @@ function ProjectMonitorCard({ project, enrollments, profileByEmail, interestInde
 
 function PeriodManager({ profile, periods, enrollments, projects, loading, error, setToast }) {
   const [seedBusy, setSeedBusy] = useState(false);
+  const [dccBusy, setDccBusy] = useState("");
+  const [dccConfirm, setDccConfirm] = useState("");
   const [seedSummary, setSeedSummary] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const activePeriods = getActivePeriods(periods);
   const archivedPeriods = getArchivedPeriods(periods);
+
+  const seedDccPracticeRoster = async () => {
+    const totalStudents = DCC_PERIODS.reduce((total, period) => total + period.students.length, 0);
+
+    setDccBusy("seed");
+    setSeedSummary("");
+    try {
+      let availablePeriods = 0;
+      let createdPeriods = 0;
+      let restoredPeriods = 0;
+      let availableStudents = 0;
+      let createdStudents = 0;
+      let restoredStudents = 0;
+
+      for (const dccPeriod of DCC_PERIODS) {
+        const periodId = dccPeriodId(dccPeriod.number);
+        const periodRef = doc(db, "periods", periodId);
+        const periodSnapshot = await getDoc(periodRef);
+        let joinCode = "";
+        if (periodSnapshot.exists()) joinCode = normalizeJoinCode(periodSnapshot.data().joinCode);
+        if (!joinCode) joinCode = await resolveDccJoinCode(dccPeriod);
+        const joinCodeKey = joinCodeLowercase(joinCode);
+        const periodPayload = {
+          periodId,
+          name: dccPeriod.periodName,
+          className: dccPeriod.courseName,
+          periodNumber: dccPeriod.number,
+          teacherId: profile.uid,
+          teacherEmail: profile.email,
+          teacherName: profile.displayName,
+          periodName: dccPeriod.periodName,
+          courseName: dccPeriod.courseName,
+          joinCode,
+          joinCodeLowercase: joinCodeKey,
+          active: true,
+          archived: false,
+          archivedAt: "",
+          archivedBy: "",
+          seededRoster: true,
+          seededRosterBatch: DCC_ROSTER_BATCH,
+          createdBySeedScript: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+
+        if (periodSnapshot.exists()) {
+          const existingPeriod = periodSnapshot.data();
+          if (existingPeriod.seededRosterBatch !== DCC_ROSTER_BATCH) {
+            throw new Error(`${periodId} already exists and is not part of the DCC practice roster.`);
+          }
+          await updateDoc(periodRef, {
+            active: true,
+            archived: false,
+            archivedAt: "",
+            archivedBy: "",
+            updatedAt: serverTimestamp(),
+          });
+          availablePeriods += 1;
+          if (existingPeriod.archived === true || existingPeriod.active === false) restoredPeriods += 1;
+        } else {
+          await setDoc(periodRef, periodPayload);
+          createdPeriods += 1;
+        }
+
+        await setDoc(
+          doc(db, "periodJoinCodes", joinCodeKey),
+          {
+            periodId,
+            teacherId: profile.uid,
+            teacherEmail: profile.email,
+            teacherName: profile.displayName,
+            periodName: dccPeriod.periodName,
+            courseName: dccPeriod.courseName,
+            joinCode,
+            joinCodeLowercase: joinCodeKey,
+            active: true,
+            seededRoster: true,
+            seededRosterBatch: DCC_ROSTER_BATCH,
+            createdBySeedScript: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+
+        for (const [studentIndex, student] of dccPeriod.students.entries()) {
+          const [studentName, rawStudentEmail] = student;
+          const studentEmail = normalizeEmail(rawStudentEmail);
+          const enrollmentId = canonicalEnrollmentId(periodId, studentEmail);
+          const enrollmentRef = doc(db, "periodEnrollments", enrollmentId);
+          const enrollmentSnapshot = await getDoc(enrollmentRef);
+          const enrollmentPayload = {
+            enrollmentId,
+            studentId: dccSeededStudentId(dccPeriod.number, studentIndex),
+            seededStudentId: dccSeededStudentId(dccPeriod.number, studentIndex),
+            studentEmail,
+            studentName,
+            periodId,
+            periodName: dccPeriod.periodName,
+            courseName: dccPeriod.courseName,
+            teacherId: profile.uid,
+            teacherEmail: profile.email,
+            teacherName: profile.displayName,
+            joinCodeLowercase: "manual",
+            active: true,
+            seededRoster: true,
+            seededRosterBatch: DCC_ROSTER_BATCH,
+            createdBySeedScript: true,
+            joinedAt: serverTimestamp(),
+            removedAt: "",
+          };
+
+          if (enrollmentSnapshot.exists()) {
+            const existingEnrollment = enrollmentSnapshot.data();
+            if (existingEnrollment.seededRosterBatch === DCC_ROSTER_BATCH) {
+              await updateDoc(enrollmentRef, {
+                active: true,
+                removedAt: "",
+              });
+              availableStudents += 1;
+              if (existingEnrollment.active === false) restoredStudents += 1;
+            } else {
+              availableStudents += 1;
+            }
+          } else {
+            await setDoc(enrollmentRef, enrollmentPayload);
+            createdStudents += 1;
+          }
+        }
+      }
+
+      const summary = `DCC practice roster is ready: ${DCC_PERIODS.length} periods, ${totalStudents} students. Created ${createdPeriods} periods and ${createdStudents} student memberships; ${availablePeriods} periods and ${availableStudents} student memberships already existed.${restoredPeriods || restoredStudents ? ` Restored ${restoredPeriods} periods and ${restoredStudents} student memberships.` : ""}`;
+      setSeedSummary(summary);
+      setToast("DCC practice roster is ready: 3 periods, 90 students.");
+    } catch (dccError) {
+      setSeedSummary(dccError.message);
+      setToast(dccError.message);
+    } finally {
+      setDccBusy("");
+    }
+  };
+
+  const removeDccPracticeRoster = async () => {
+    setDccBusy("remove");
+    setSeedSummary("");
+    try {
+      const dccPeriods = periods.filter((period) => period.seededRosterBatch === DCC_ROSTER_BATCH);
+      const dccPeriodIds = new Set(dccPeriods.map((period) => period.id));
+      const dccEnrollments = enrollments.filter(
+        (enrollment) =>
+          enrollment.seededRosterBatch === DCC_ROSTER_BATCH &&
+          dccPeriodIds.has(enrollment.periodId),
+      );
+
+      for (const enrollment of dccEnrollments) {
+        await deleteDoc(doc(db, "periodEnrollments", enrollment.id));
+      }
+
+      for (const period of dccPeriods) {
+        if (period.joinCodeLowercase) {
+          try {
+            const joinCodeRef = doc(db, "periodJoinCodes", period.joinCodeLowercase);
+            const joinCodeSnapshot = await getDoc(joinCodeRef);
+            if (joinCodeSnapshot.exists() && joinCodeSnapshot.data().seededRosterBatch === DCC_ROSTER_BATCH) {
+              await deleteDoc(joinCodeRef);
+            }
+          } catch {
+            // Missing or inaccessible join-code records should not block removing marked roster records.
+          }
+        }
+        await updateDoc(doc(db, "periods", period.id), {
+          active: false,
+          archived: true,
+          archivedAt: serverTimestamp(),
+          archivedBy: profile.email,
+          updatedAt: serverTimestamp(),
+        });
+        await deleteDoc(doc(db, "periods", period.id));
+      }
+
+      const summary = `Removed ${dccPeriods.length} DCC periods and ${dccEnrollments.length} seeded memberships.`;
+      setSeedSummary(summary);
+      setToast("DCC practice roster removed");
+    } catch (removeError) {
+      setSeedSummary(removeError.message);
+      setToast(removeError.message);
+    } finally {
+      setDccBusy("");
+    }
+  };
 
   // No "remove demo roster" action is exposed: demo periods use the same period/enrollment
   // model as class data, and teachers may attach practice projects to them. Deterministic
@@ -1598,7 +1930,7 @@ function PeriodManager({ profile, periods, enrollments, projects, loading, error
   const seedDemoRoster = async () => {
     const totalStudents = DEMO_PERIODS.reduce((total, period) => total + period.students.length, 0);
     const confirmed = window.confirm(
-      `Seed ${DEMO_PERIODS.length} demo periods and ${totalStudents} fake students? This creates predictable demo period and enrollment records only; it does not create Firebase Auth accounts.`,
+      `Seed ${DEMO_PERIODS.length} practice periods and ${totalStudents} practice students? This creates predictable period and enrollment records only; it does not create Firebase Auth accounts.`,
     );
     if (!confirmed) return;
 
@@ -1681,9 +2013,9 @@ function PeriodManager({ profile, periods, enrollments, projects, loading, error
         }
       }
 
-      const summary = `${createdPeriods} demo periods created, ${availablePeriods} already available; ${createdStudents} demo students created, ${availableStudents} already available.`;
+      const summary = `${createdPeriods} practice periods created, ${availablePeriods} already available; ${createdStudents} practice students created, ${availableStudents} already available.`;
       setSeedSummary(summary);
-      setToast(`Demo roster ready: ${createdStudents + availableStudents} students`);
+      setToast(`Practice roster ready: ${createdStudents + availableStudents} students`);
     } catch (seedError) {
       setSeedSummary(seedError.message);
       setToast(seedError.message);
@@ -1703,12 +2035,55 @@ function PeriodManager({ profile, periods, enrollments, projects, loading, error
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <${Button} icon=${Sparkles} variant="secondary" disabled=${Boolean(dccBusy)} onClick=${() => setDccConfirm("seed")}>
+            ${dccBusy === "seed" ? "Creating..." : "Create DCC Practice Roster"}
+          </${Button}>
+          <${Button} icon=${Trash2} variant="ghost" disabled=${Boolean(dccBusy)} onClick=${() => setDccConfirm("remove")}>
+            ${dccBusy === "remove" ? "Removing..." : "Remove DCC Practice Roster"}
+          </${Button}>
           <${Button} icon=${Sparkles} variant="secondary" disabled=${seedBusy} onClick=${seedDemoRoster}>
-            ${seedBusy ? "Seeding..." : "Seed Demo Roster"}
+            ${seedBusy ? "Seeding..." : "Seed Practice Roster"}
           </${Button}>
           <${Badge} icon=${LayoutGrid}>${activePeriods.length} active</${Badge}>
         </div>
       </div>
+
+      ${dccConfirm
+        ? html`
+            <div className="rounded-2xl border border-warning/30 bg-warning/10 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-sm font-black text-white">
+                    ${dccConfirm === "seed"
+                      ? "Create DCC Periods 1-3 with 30 students in each class?"
+                      : "Remove the DCC practice roster? This will delete the seeded DCC periods, memberships, and seeded roster records only."}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    This action does not create Firebase Auth accounts, send emails, or change unrelated users.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <${Button}
+                    icon=${dccConfirm === "seed" ? Sparkles : Trash2}
+                    variant=${dccConfirm === "seed" ? "primary" : "danger"}
+                    disabled=${Boolean(dccBusy)}
+                    onClick=${async () => {
+                      const nextAction = dccConfirm;
+                      setDccConfirm("");
+                      if (nextAction === "seed") await seedDccPracticeRoster();
+                      else await removeDccPracticeRoster();
+                    }}
+                  >
+                    ${dccConfirm === "seed" ? "Create Roster" : "Remove Roster"}
+                  </${Button}>
+                  <${Button} variant="ghost" disabled=${Boolean(dccBusy)} onClick=${() => setDccConfirm("")}>
+                    Cancel
+                  </${Button}>
+                </div>
+              </div>
+            </div>
+          `
+        : null}
 
       ${seedSummary
         ? html`<p className="rounded-xl bg-lens/10 p-3 text-sm font-semibold text-sky-100 ring-1 ring-lens/25">${seedSummary}</p>`
