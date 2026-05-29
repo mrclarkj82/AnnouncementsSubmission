@@ -1508,7 +1508,7 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
         ? null
         : html`
             <header className="sticky top-0 z-30 border-b border-slate-800/90 bg-coal/90 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
-              <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
+              <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4">
                 <div className="flex min-w-0 items-center gap-3">
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-lens text-slate-950">
                     <${Camera} size=${22} strokeWidth=${2.5} />
@@ -1526,7 +1526,7 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
                   <${Button} icon=${LogOut} variant="ghost" onClick=${() => signOut(auth)}>Sign out</${Button}>
                 </div>
               </div>
-              <nav className="mx-auto mt-3 flex max-w-7xl gap-2 overflow-x-auto pb-1 vp-scroll">
+              <nav className="mx-auto mt-3 flex max-w-[1800px] gap-2 overflow-x-auto pb-1 vp-scroll">
                 ${nav.map(
                   (item) => html`
                     <button
@@ -1551,7 +1551,7 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
               </nav>
             </header>
           `}
-      <main className=${classNames(kioskActive ? "" : "mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8")}>
+      <main className=${classNames(kioskActive ? "" : "mx-auto max-w-[1800px] px-4 py-6 sm:px-6 lg:px-8 2xl:px-10")}>
         ${children}
       </main>
     </div>
@@ -2662,7 +2662,7 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
       ${loading
         ? html`<${EmptyState} icon=${ClipboardCheck} title="Loading projects" />`
         : html`
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-5">
               ${projects.map(
                 (project) => html`
                   <${ProjectAdminCard}
@@ -3108,16 +3108,16 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
   }
 
   return html`
-    <section className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
-      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+    <section className="mt-5 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-4 sm:p-5">
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           <h4 className="font-black text-white">Groups by period</h4>
           <p className="text-sm text-slate-400">Switch periods, then drag students into one open group at a time.</p>
         </div>
-        <${Badge} icon=${Users}>${selectedStudents.length} students</${Badge}>
+        <${Badge} icon=${Users} className="shrink-0">${selectedStudents.length} students</${Badge}>
       </div>
 
-      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+      <div className="mb-4 flex flex-wrap gap-2">
         ${periodSummaries.map(
           (summary) => html`
             <button
@@ -3140,8 +3140,8 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
       ${selectedStudents.length === 0
         ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No students are enrolled in this period yet.</p>`
         : html`
-            <div className="grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
-              <section className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
+            <div className="grid items-start gap-4 xl:grid-cols-[minmax(30rem,1fr)_minmax(24rem,0.82fr)] 2xl:grid-cols-[minmax(42rem,1.15fr)_minmax(30rem,0.85fr)]">
+              <section className="min-w-0 rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3 sm:p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <h5 className="font-black text-white">Ungrouped Students</h5>
                   <${Badge} icon=${Users}>${ungroupedStudents.length}</${Badge}>
@@ -3156,7 +3156,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                               key=${student.email}
                               draggable=${true}
                               onDragStart=${(event) => startDrag(event, student)}
-                              className="flex cursor-grab flex-col gap-2 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 sm:flex-row sm:items-center sm:justify-between"
+                              className="grid min-w-0 cursor-grab gap-3 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
                             >
                               <div className="min-w-0">
                                 <p className="truncate font-black text-white">${student.name}</p>
@@ -3167,6 +3167,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                                     <${Button}
                                       type="button"
                                       variant="ghost"
+                                      className="w-full md:w-auto md:min-w-[9.5rem]"
                                       onClick=${() => moveStudentToGroup(student, openGroup.id)}
                                     >
                                       Add to open group
@@ -3180,7 +3181,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                     `}
               </section>
 
-              <section className="space-y-3">
+              <section className="min-w-0 space-y-3">
                 ${currentGroups.length === 0
                   ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No groups yet. Use the drop zone below to create one.</p>`
                   : null}
@@ -3216,7 +3217,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                         className="flex w-full items-center justify-between gap-3 text-left"
                         onClick=${() => setOpenGroupId(group.id)}
                       >
-                        <span>
+                        <span className="min-w-0">
                           <span className="block font-black text-white">${group.name}</span>
                           <span className="text-xs font-semibold text-slate-500">
                             ${groupStudents.length} student${groupStudents.length === 1 ? "" : "s"}
@@ -3231,7 +3232,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                       ${isOpen
                         ? html`
                             <div className="mt-3 space-y-3">
-                              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                              <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-end">
                                 <label className="grid gap-1 text-sm font-bold text-slate-300">
                                   Group name
                                   <${TextInput}
@@ -3244,6 +3245,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                                   icon=${Trash2}
                                   type="button"
                                   variant="ghost"
+                                  className="w-full 2xl:w-auto"
                                   onClick=${() => deleteGroup(group.id)}
                                 >
                                   Delete group
@@ -3260,7 +3262,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                                               key=${student.email}
                                               draggable=${true}
                                               onDragStart=${(event) => startDrag(event, student)}
-                                              className="flex cursor-grab flex-col gap-2 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 sm:flex-row sm:items-center sm:justify-between"
+                                              className="grid min-w-0 cursor-grab gap-3 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
                                             >
                                               <div className="min-w-0">
                                                 <p className="truncate font-black text-white">${student.name}</p>
@@ -3269,6 +3271,7 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                                               <${Button}
                                                 type="button"
                                                 variant="ghost"
+                                                className="w-full md:w-auto"
                                                 onClick=${() => removeStudentFromGroups(student.email)}
                                               >
                                                 Remove
@@ -3347,7 +3350,7 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, period
   };
 
   return html`
-    <article className="vp-panel rounded-3xl p-4">
+    <article className="vp-panel rounded-3xl p-4 xl:p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-lg font-black text-white">${project.title}</h3>
