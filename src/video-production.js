@@ -128,6 +128,7 @@ const CURRENT_TASKS = [
   "Upload",
 ];
 const PERIOD_SESSION_KEY = "videoStudio.selectedMonitorPeriodId";
+const DCC_OWNER_EMAIL = "joseph.clark@doralacademynv.org";
 
 const DEMO_PERIODS = [
   {
@@ -433,6 +434,10 @@ function dccPeriodId(periodNumber) {
 
 function dccSeededStudentId(periodNumber, index) {
   return `dcc-p${periodNumber}-student-${String(index + 1).padStart(3, "0")}`;
+}
+
+function isDccRosterOwner(profile) {
+  return normalizeEmail(profile?.email) === DCC_OWNER_EMAIL;
 }
 
 async function resolveDccJoinCode(dccPeriod) {
@@ -1729,13 +1734,27 @@ function PeriodManager({ profile, periods, enrollments, projects, loading, error
   const [seedBusy, setSeedBusy] = useState(false);
   const [dccBusy, setDccBusy] = useState("");
   const [dccConfirm, setDccConfirm] = useState("");
+  const [dccAutoSeeded, setDccAutoSeeded] = useState(false);
   const [seedSummary, setSeedSummary] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const activePeriods = getActivePeriods(periods);
   const archivedPeriods = getArchivedPeriods(periods);
+  const dccSeededPeriods = periods.filter((period) => period.seededRosterBatch === DCC_ROSTER_BATCH);
+  const dccRosterReady = DCC_PERIODS.every((dccPeriod) =>
+    dccSeededPeriods.some(
+      (period) =>
+        period.id === dccPeriodId(dccPeriod.number) &&
+        period.active !== false &&
+        !isPeriodArchived(period),
+    ),
+  );
 
   const seedDccPracticeRoster = async () => {
     const totalStudents = DCC_PERIODS.reduce((total, period) => total + period.students.length, 0);
+    if (!isDccRosterOwner(profile)) {
+      setToast(`Sign in as ${DCC_OWNER_EMAIL} to create this DCC roster.`);
+      return;
+    }
 
     setDccBusy("seed");
     setSeedSummary("");
@@ -1876,6 +1895,11 @@ function PeriodManager({ profile, periods, enrollments, projects, loading, error
   };
 
   const removeDccPracticeRoster = async () => {
+    if (!isDccRosterOwner(profile)) {
+      setToast(`Sign in as ${DCC_OWNER_EMAIL} to remove this DCC roster.`);
+      return;
+    }
+
     setDccBusy("remove");
     setSeedSummary("");
     try {
@@ -1923,6 +1947,12 @@ function PeriodManager({ profile, periods, enrollments, projects, loading, error
       setDccBusy("");
     }
   };
+
+  useEffect(() => {
+    if (loading || dccAutoSeeded || dccBusy || !isDccRosterOwner(profile) || dccRosterReady) return;
+    setDccAutoSeeded(true);
+    seedDccPracticeRoster();
+  }, [loading, dccAutoSeeded, dccBusy, profile?.email, dccRosterReady]);
 
   // No "remove demo roster" action is exposed: demo periods use the same period/enrollment
   // model as class data, and teachers may attach practice projects to them. Deterministic

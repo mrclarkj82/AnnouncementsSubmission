@@ -440,6 +440,7 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly([
           "enrollmentId",
           "studentId",
+          "seededStudentId",
           "studentEmail",
           "studentName",
           "periodId",
