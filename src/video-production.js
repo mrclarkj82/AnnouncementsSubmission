@@ -9,6 +9,7 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronDown,
   Circle,
   ClipboardCheck,
   Clock,
@@ -127,6 +128,77 @@ const CURRENT_TASKS = [
 ];
 const PERIOD_SESSION_KEY = "videoStudio.selectedMonitorPeriodId";
 
+const DEMO_PERIODS = [
+  {
+    number: 1,
+    periodName: "Period 1",
+    courseName: "Video Production I",
+    students: [
+      "Alex Morgan",
+      "Jordan Lee",
+      "Taylor Brooks",
+      "Casey Rivera",
+      "Morgan Patel",
+      "Riley Chen",
+      "Avery Johnson",
+      "Cameron Davis",
+      "Sam Quinn",
+      "Jamie Torres",
+    ],
+  },
+  {
+    number: 2,
+    periodName: "Period 2",
+    courseName: "Video Production I",
+    students: [
+      "Parker Stone",
+      "Reese Martin",
+      "Drew Bennett",
+      "Skyler Adams",
+      "Kendall Price",
+      "Rowan Mitchell",
+      "Hayden Reed",
+      "Emerson Clark",
+      "Finley Garcia",
+      "Quinn Sanders",
+    ],
+  },
+  {
+    number: 3,
+    periodName: "Period 3",
+    courseName: "Advanced Video Production",
+    students: [
+      "Harper Wilson",
+      "Logan Hayes",
+      "Maya Collins",
+      "Elliot Ramirez",
+      "Nico Foster",
+      "Sage Coleman",
+      "Blake Nguyen",
+      "Jules Parker",
+      "Marley Cooper",
+      "Tatum Gray",
+    ],
+  },
+  {
+    number: 4,
+    periodName: "Period 4",
+    courseName: "Broadcast Studio",
+    students: [
+      "Charlie Moore",
+      "Dakota King",
+      "Robin Scott",
+      "Kai Thompson",
+      "Sydney Flores",
+      "Remy Hughes",
+      "Micah Ward",
+      "Lennon Bailey",
+      "Phoenix Ross",
+      "Shawn Murphy",
+    ],
+  },
+];
+
 function classNames(...values) {
   return values.filter(Boolean).join(" ");
 }
@@ -200,6 +272,10 @@ function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function safeFirestoreId(value) {
+  return safeText(value).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "demo";
+}
+
 function titleFromEmail(email) {
   const name = normalizeEmail(email).split("@")[0] || "student";
   return name
@@ -207,6 +283,29 @@ function titleFromEmail(email) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function slugFromName(name) {
+  return safeText(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.+|\.+$/g, "");
+}
+
+function demoOwnerKey(profile) {
+  return safeFirestoreId(profile?.uid || normalizeEmail(profile?.email) || "teacher").toLowerCase();
+}
+
+function demoPeriodId(profile, demoPeriod) {
+  return `demo-${demoOwnerKey(profile)}-period-${demoPeriod.number}`;
+}
+
+function demoJoinCode(profile, demoPeriod) {
+  return `DEMO-${demoOwnerKey(profile).slice(0, 6).toUpperCase()}-P${demoPeriod.number}`;
+}
+
+function demoStudentEmail(name, demoPeriod) {
+  return `${slugFromName(name)}.p${demoPeriod.number}.demo${DORAL_STUDENT_DOMAIN}`;
 }
 
 function normalizeJoinCode(code) {
@@ -349,20 +448,25 @@ function normalizeShots(shots) {
   );
 }
 
+function normalizeGroupItems(groups) {
+  return Array.isArray(groups)
+    ? groups.map((group, index) => {
+        const assignedStudentEmails = Array.isArray(group.assignedStudentEmails)
+          ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+          : splitEmails(group.assignedStudents || "");
+        return {
+          id: group.id || makeId("group"),
+          name: safeText(group.name) || `Group ${index + 1}`,
+          assignedStudentEmails,
+          assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+        };
+      })
+    : [];
+}
+
 function normalizeProjectGroups(groups, fallbackEmails = [], fallbackName = "Group 1") {
-  if (Array.isArray(groups) && groups.length) {
-    return groups.map((group, index) => {
-      const assignedStudentEmails = Array.isArray(group.assignedStudentEmails)
-        ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
-        : splitEmails(group.assignedStudents || "");
-      return {
-        id: group.id || makeId("group"),
-        name: safeText(group.name) || `Group ${index + 1}`,
-        assignedStudentEmails,
-        assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
-      };
-    });
-  }
+  const normalizedGroups = normalizeGroupItems(groups);
+  if (normalizedGroups.length) return normalizedGroups;
 
   const assignedStudentEmails = fallbackEmails.map(normalizeEmail).filter(Boolean);
   return [
@@ -372,6 +476,82 @@ function normalizeProjectGroups(groups, fallbackEmails = [], fallbackName = "Gro
       assignedStudentEmails,
       assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
     },
+  ];
+}
+
+function normalizeProjectPeriodIds(project) {
+  const ids = Array.isArray(project?.periodIds)
+    ? project.periodIds
+    : project?.periodId
+      ? [project.periodId]
+      : [];
+  return [...new Set(ids.map(safeText).filter(Boolean))];
+}
+
+function projectBelongsToPeriod(project, periodId) {
+  return normalizeProjectPeriodIds(project).includes(safeText(periodId));
+}
+
+function projectPeriodSummaries(project, periods = []) {
+  const periodMap = new Map(periods.map((period) => [period.id, period]));
+  return normalizeProjectPeriodIds(project).map((periodId, index) => {
+    const period = periodMap.get(periodId);
+    return {
+      id: periodId,
+      periodName:
+        period?.periodName ||
+        (periodId === project?.periodId ? project?.periodName : "") ||
+        `Period ${index + 1}`,
+      courseName:
+        period?.courseName ||
+        (periodId === project?.periodId ? project?.courseName : "") ||
+        "",
+    };
+  });
+}
+
+function periodSummaryLabel(summary) {
+  return `${summary.periodName}${summary.courseName ? ` - ${summary.courseName}` : ""}`;
+}
+
+function projectPeriodLabel(project, periods = []) {
+  const summaries = projectPeriodSummaries(project, periods);
+  if (!summaries.length) return "No periods";
+  if (summaries.length === 1) return periodSummaryLabel(summaries[0]);
+  return summaries.map(periodSummaryLabel).join(", ");
+}
+
+function normalizeGroupsByPeriod(project) {
+  const ids = normalizeProjectPeriodIds(project);
+  const source =
+    project?.groupsByPeriod && typeof project.groupsByPeriod === "object"
+      ? project.groupsByPeriod
+      : {};
+  return ids.reduce((groupsByPeriod, periodId) => {
+    if (Array.isArray(source[periodId])) {
+      groupsByPeriod[periodId] = normalizeGroupItems(source[periodId]);
+    } else if (periodId === project?.periodId) {
+      groupsByPeriod[periodId] = normalizeProjectGroups(
+        project?.groups,
+        project?.assignedStudentEmails || [],
+        project?.groupName || "Group 1",
+      );
+    } else {
+      groupsByPeriod[periodId] = [];
+    }
+    return groupsByPeriod;
+  }, {});
+}
+
+function groupStudentEmailsByPeriod(groupsByPeriod) {
+  return [
+    ...new Set(
+      Object.values(groupsByPeriod || {})
+        .flatMap((groups) => normalizeGroupItems(groups))
+        .flatMap((group) => group.assignedStudentEmails)
+        .map(normalizeEmail)
+        .filter(Boolean),
+    ),
   ];
 }
 
@@ -431,9 +611,14 @@ function serializeGroupDrafts(groupDrafts) {
 }
 
 function cleanProject(project) {
+  const periodIds = normalizeProjectPeriodIds(project);
   const fallbackEmails = Array.isArray(project?.assignedStudentEmails)
     ? project.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
     : [];
+  const groupsByPeriod = normalizeGroupsByPeriod({
+    ...project,
+    periodIds: periodIds.length ? periodIds : project?.periodId ? [project.periodId] : [],
+  });
   const groups = normalizeProjectGroups(
     project?.groups,
     fallbackEmails,
@@ -443,14 +628,17 @@ function cleanProject(project) {
     ...new Set([
       ...fallbackEmails,
       ...groups.flatMap((group) => group.assignedStudentEmails),
+      ...groupStudentEmailsByPeriod(groupsByPeriod),
     ]),
   ];
   return {
     ...project,
     periodId: safeText(project?.periodId),
+    periodIds,
     periodName: safeText(project?.periodName),
     courseName: safeText(project?.courseName),
     groups,
+    groupsByPeriod,
     checklistItems: normalizeChecklist(project?.checklistItems || []),
     scriptSections: normalizeScriptSections(project?.scriptSections || []),
     shotList: normalizeShots(project?.shotList || []),
@@ -583,6 +771,13 @@ function activeEnrollmentsForPeriod(enrollments, periodId) {
         safeText(b.studentName || titleFromEmail(b.studentEmail)),
       ),
     );
+}
+
+function studentsForPeriod(enrollments, periodId) {
+  return activeEnrollmentsForPeriod(enrollments, periodId).map((enrollment) => ({
+    email: normalizeEmail(enrollment.studentEmail),
+    name: safeText(enrollment.studentName) || titleFromEmail(enrollment.studentEmail),
+  }));
 }
 
 function usePeriods(profile) {
@@ -718,23 +913,28 @@ function useVideoProjects(profile, enrollments = []) {
       }
 
       const buckets = new Map();
-      const unsubscribes = studentPeriodIds.map((periodId) =>
+      const updateStudentProjects = () => {
+        const deduped = new Map();
+        [...buckets.values()]
+          .flat()
+          .forEach((project) => deduped.set(project.id, project));
+        setProjects(
+          [...deduped.values()].sort((a, b) => {
+            const activeA = a.status === "active" ? 0 : 1;
+            const activeB = b.status === "active" ? 0 : 1;
+            return activeA - activeB || safeText(a.dueDate).localeCompare(safeText(b.dueDate));
+          }),
+        );
+      };
+      const unsubscribes = studentPeriodIds.flatMap((periodId) => [
         onSnapshot(
           query(projectsRef, where("periodId", "==", periodId)),
           (snapshot) => {
             buckets.set(
-              periodId,
+              `legacy-${periodId}`,
               snapshot.docs.map((item) => cleanProject({ id: item.id, ...item.data() })),
             );
-            setProjects(
-              [...buckets.values()]
-                .flat()
-                .sort((a, b) => {
-                  const activeA = a.status === "active" ? 0 : 1;
-                  const activeB = b.status === "active" ? 0 : 1;
-                  return activeA - activeB || safeText(a.dueDate).localeCompare(safeText(b.dueDate));
-                }),
-            );
+            updateStudentProjects();
             setError("");
             setLoading(false);
           },
@@ -743,7 +943,23 @@ function useVideoProjects(profile, enrollments = []) {
             setLoading(false);
           },
         ),
-      );
+        onSnapshot(
+          query(projectsRef, where("periodIds", "array-contains", periodId)),
+          (snapshot) => {
+            buckets.set(
+              `multi-${periodId}`,
+              snapshot.docs.map((item) => cleanProject({ id: item.id, ...item.data() })),
+            );
+            updateStudentProjects();
+            setError("");
+            setLoading(false);
+          },
+          (snapshotError) => {
+            setError(snapshotError.message);
+            setLoading(false);
+          },
+        ),
+      ]);
 
       return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
     }
@@ -1135,7 +1351,7 @@ function MonitorDashboard({
   const selectedPeriod = activePeriods.find((period) => period.id === selectedPeriodId);
   const activeProjects = projects
     .filter((project) => project.status !== "archived")
-    .filter((project) => !selectedPeriodId || project.periodId === selectedPeriodId);
+    .filter((project) => !selectedPeriodId || projectBelongsToPeriod(project, selectedPeriodId));
   const selectedEnrollments = activeEnrollmentsForPeriod(enrollments, selectedPeriodId);
   const profileByEmail = useMemo(() => {
     const map = new Map();
@@ -1233,10 +1449,12 @@ function MonitorDashboard({
 
 function ProjectMonitorCard({ project, enrollments, profileByEmail, interestIndex }) {
   const progress = projectProgress(project);
-  const students =
-    project.assignedStudentEmails?.length
+  const periodStudentEmails = enrollments.map((enrollment) => normalizeEmail(enrollment.studentEmail)).filter(Boolean);
+  const students = periodStudentEmails.length
+    ? periodStudentEmails
+    : project.assignedStudentEmails?.length
       ? project.assignedStudentEmails
-      : enrollments.map((enrollment) => enrollment.studentEmail);
+      : [];
   const interestPool = students.flatMap((email) =>
     flattenStudentInterests(profileByEmail.get(normalizeEmail(email))).map(
       (interest) => `${titleFromEmail(email)} - ${interest}`,
@@ -1290,6 +1508,109 @@ function ProjectMonitorCard({ project, enrollments, profileByEmail, interestInde
 }
 
 function PeriodManager({ profile, periods, enrollments, loading, error, setToast }) {
+  const [seedBusy, setSeedBusy] = useState(false);
+  const [seedSummary, setSeedSummary] = useState("");
+
+  // No "remove demo roster" action is exposed: demo periods use the same period/enrollment
+  // model as class data, and teachers may attach practice projects to them. Deterministic
+  // IDs and demo-style emails make reseeding idempotent without risking real work deletion.
+  const seedDemoRoster = async () => {
+    const totalStudents = DEMO_PERIODS.reduce((total, period) => total + period.students.length, 0);
+    const confirmed = window.confirm(
+      `Seed ${DEMO_PERIODS.length} demo periods and ${totalStudents} fake students? This creates predictable demo period and enrollment records only; it does not create Firebase Auth accounts.`,
+    );
+    if (!confirmed) return;
+
+    setSeedBusy(true);
+    setSeedSummary("");
+    try {
+      let createdPeriods = 0;
+      let availablePeriods = 0;
+      let createdStudents = 0;
+      let availableStudents = 0;
+
+      for (const demoPeriod of DEMO_PERIODS) {
+        const periodId = demoPeriodId(profile, demoPeriod);
+        const periodRef = doc(db, "periods", periodId);
+        const periodSnapshot = await getDoc(periodRef);
+        const joinCode = demoJoinCode(profile, demoPeriod);
+        const joinCodeKey = joinCodeLowercase(joinCode);
+        const periodPayload = {
+          periodId,
+          teacherId: profile.uid,
+          teacherEmail: profile.email,
+          teacherName: profile.displayName,
+          periodName: demoPeriod.periodName,
+          courseName: demoPeriod.courseName,
+          joinCode,
+          joinCodeLowercase: joinCodeKey,
+          active: true,
+          archived: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+
+        if (periodSnapshot.exists()) {
+          availablePeriods += 1;
+        } else {
+          await setDoc(periodRef, periodPayload);
+          await setDoc(doc(db, "periodJoinCodes", joinCodeKey), {
+            periodId,
+            teacherId: profile.uid,
+            teacherEmail: profile.email,
+            teacherName: profile.displayName,
+            periodName: demoPeriod.periodName,
+            courseName: demoPeriod.courseName,
+            joinCode,
+            joinCodeLowercase: joinCodeKey,
+            active: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          createdPeriods += 1;
+        }
+
+        for (const studentName of demoPeriod.students) {
+          const studentEmail = demoStudentEmail(studentName, demoPeriod);
+          const enrollmentId = canonicalEnrollmentId(periodId, studentEmail);
+          const enrollmentRef = doc(db, "periodEnrollments", enrollmentId);
+          const enrollmentSnapshot = await getDoc(enrollmentRef);
+          if (enrollmentSnapshot.exists()) {
+            availableStudents += 1;
+            continue;
+          }
+
+          await setDoc(enrollmentRef, {
+            enrollmentId,
+            studentId: studentEmail,
+            studentEmail,
+            studentName,
+            periodId,
+            periodName: demoPeriod.periodName,
+            courseName: demoPeriod.courseName,
+            teacherId: profile.uid,
+            teacherEmail: profile.email,
+            teacherName: profile.displayName,
+            joinCodeLowercase: "manual",
+            active: true,
+            joinedAt: serverTimestamp(),
+            removedAt: "",
+          });
+          createdStudents += 1;
+        }
+      }
+
+      const summary = `${createdPeriods} demo periods created, ${availablePeriods} already available; ${createdStudents} demo students created, ${availableStudents} already available.`;
+      setSeedSummary(summary);
+      setToast(`Demo roster ready: ${createdStudents + availableStudents} students`);
+    } catch (seedError) {
+      setSeedSummary(seedError.message);
+      setToast(seedError.message);
+    } finally {
+      setSeedBusy(false);
+    }
+  };
+
   return html`
     <section className="space-y-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1300,8 +1621,17 @@ function PeriodManager({ profile, periods, enrollments, loading, error, setToast
             Create class periods and share join codes so students can enroll themselves.
           </p>
         </div>
-        <${Badge} icon=${LayoutGrid}>${periods.filter((period) => period.active && !period.archived).length} active</${Badge}>
+        <div className="flex flex-wrap gap-2">
+          <${Button} icon=${Sparkles} variant="secondary" disabled=${seedBusy} onClick=${seedDemoRoster}>
+            ${seedBusy ? "Seeding..." : "Seed Demo Roster"}
+          </${Button}>
+          <${Badge} icon=${LayoutGrid}>${periods.filter((period) => period.active && !period.archived).length} active</${Badge}>
+        </div>
       </div>
+
+      ${seedSummary
+        ? html`<p className="rounded-xl bg-lens/10 p-3 text-sm font-semibold text-sky-100 ring-1 ring-lens/25">${seedSummary}</p>`
+        : null}
 
       <${PeriodCreateForm} profile=${profile} setToast=${setToast} />
 
@@ -1588,7 +1918,7 @@ function PeriodCard({ profile, period, enrollments, setToast }) {
   `;
 }
 
-function ProjectManager({ profile, projects, loading, error, setToast, onPreviewStudent, periods }) {
+function ProjectManager({ profile, projects, loading, error, setToast, onPreviewStudent, periods, enrollments }) {
   return html`
     <section className="space-y-5">
       <div>
@@ -1599,7 +1929,12 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
         </p>
       </div>
 
-      <${ProjectCreateForm} profile=${profile} periods=${periods} setToast=${setToast} />
+      <${ProjectCreateForm}
+        profile=${profile}
+        periods=${periods}
+        enrollments=${enrollments}
+        setToast=${setToast}
+      />
 
       ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
       ${loading
@@ -1614,6 +1949,8 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
                     project=${project}
                     setToast=${setToast}
                     onPreviewStudent=${onPreviewStudent}
+                    periods=${periods}
+                    enrollments=${enrollments}
                   />
                 `,
               )}
@@ -1623,14 +1960,69 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
   `;
 }
 
-function ProjectCreateForm({ profile, periods, setToast }) {
+function MultiPeriodDropdown({ periods, selectedPeriodIds, onChange }) {
+  const [open, setOpen] = useState(false);
+  const selectedPeriods = periods.filter((period) => selectedPeriodIds.includes(period.id));
+  const label =
+    selectedPeriods.length === 0
+      ? "Select class periods"
+      : selectedPeriods.length === 1
+        ? periodSummaryLabel(selectedPeriods[0])
+        : `${selectedPeriods.length} periods selected`;
+
+  const togglePeriod = (periodId) => {
+    onChange(
+      selectedPeriodIds.includes(periodId)
+        ? selectedPeriodIds.filter((id) => id !== periodId)
+        : [...selectedPeriodIds, periodId],
+    );
+  };
+
+  return html`
+    <div className="relative">
+      <button
+        type="button"
+        className="vp-field flex min-h-12 w-full items-center justify-between gap-3 px-3 py-3 text-left font-black"
+        onClick=${() => setOpen((current) => !current)}
+        aria-expanded=${open}
+      >
+        <span>${label}</span>
+        <${ChevronDown} size=${18} />
+      </button>
+      ${open
+        ? html`
+            <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-30 max-h-72 overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-950 p-2 shadow-2xl">
+              ${periods.map(
+                (period) => html`
+                  <label
+                    key=${period.id}
+                    className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-800"
+                  >
+                    <input
+                      type="checkbox"
+                      checked=${selectedPeriodIds.includes(period.id)}
+                      onChange=${() => togglePeriod(period.id)}
+                    />
+                    <span>
+                      ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
+                    </span>
+                  </label>
+                `,
+              )}
+            </div>
+          `
+        : null}
+    </div>
+  `;
+}
+
+function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
   const activePeriods = periods.filter((period) => period.active && !period.archived);
   const [form, setForm] = useState(() => ({
     title: "",
     objective: "",
     dueDate: todayISO(),
-    periodId: "",
-    groups: [newGroupDraft(1)],
+    periodIds: [],
     assignedTeacherEmail: profile.email,
     teacherNotes: "",
   }));
@@ -1638,45 +2030,38 @@ function ProjectCreateForm({ profile, periods, setToast }) {
   const [error, setError] = useState("");
 
   const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
-  const updateGroup = (groupId, field, value) =>
-    setForm((current) => ({
-      ...current,
-      groups: current.groups.map((group) => (group.id === groupId ? { ...group, [field]: value } : group)),
-    }));
-  const addGroup = () =>
-    setForm((current) => ({
-      ...current,
-      groups: [...current.groups, newGroupDraft(current.groups.length + 1)],
-    }));
-  const removeGroup = (groupId) =>
-    setForm((current) => ({
-      ...current,
-      groups: current.groups.length > 1 ? current.groups.filter((group) => group.id !== groupId) : current.groups,
-    }));
-
   useEffect(() => {
-    if (!activePeriods.length) return;
-    setForm((current) =>
-      current.periodId && activePeriods.some((period) => period.id === current.periodId)
-        ? current
-        : { ...current, periodId: activePeriods[0].id },
-    );
+    setForm((current) => ({
+      ...current,
+      periodIds: current.periodIds.filter((periodId) =>
+        activePeriods.some((period) => period.id === periodId),
+      ),
+    }));
   }, [activePeriods.map((period) => period.id).join("|")]);
 
   const submit = async (event) => {
     event.preventDefault();
     setError("");
-    const selectedPeriod = activePeriods.find((period) => period.id === form.periodId);
-    const groups = serializeGroupDrafts(form.groups);
-    const assignedStudentEmails = groupStudentEmails(groups);
-    const assignedTeacherEmail = normalizeEmail(selectedPeriod?.teacherEmail || profile.email);
+    const selectedPeriods = activePeriods.filter((period) => form.periodIds.includes(period.id));
+    const primaryPeriod = selectedPeriods[0];
+    const periodIds = selectedPeriods.map((period) => period.id);
+    const groupsByPeriod = periodIds.reduce((groups, periodId) => ({ ...groups, [periodId]: [] }), {});
+    const assignedStudentEmails = [
+      ...new Set(
+        periodIds
+          .flatMap((periodId) => activeEnrollmentsForPeriod(enrollments, periodId))
+          .map((enrollment) => normalizeEmail(enrollment.studentEmail))
+          .filter(Boolean),
+      ),
+    ];
+    const assignedTeacherEmail = normalizeEmail(primaryPeriod?.teacherEmail || profile.email);
 
     if (!safeText(form.title) || !safeText(form.objective)) {
       setError("Project title and objective are required.");
       return;
     }
-    if (!selectedPeriod) {
-      setError("Create or select a period before creating a project.");
+    if (!selectedPeriods.length) {
+      setError("Select at least one class period before creating a project.");
       return;
     }
     if (assignedStudentEmails.some((email) => !isAllowedDoralEmail(email))) {
@@ -1695,18 +2080,26 @@ function ProjectCreateForm({ profile, periods, setToast }) {
         objective: safeText(form.objective),
         description: safeText(form.objective),
         dueDate: form.dueDate || todayISO(),
-        periodId: selectedPeriod.id,
-        periodName: selectedPeriod.periodName,
-        courseName: selectedPeriod.courseName || "",
-        groupName: projectGroupLabel({ groups, groupName: selectedPeriod.periodName }),
-        groupMode: groups.length > 1,
-        groups,
+        periodId: primaryPeriod.id,
+        periodIds,
+        periodName: primaryPeriod.periodName,
+        courseName: primaryPeriod.courseName || "",
+        periodNames: selectedPeriods.map(periodSummaryLabel),
+        periodSummaries: selectedPeriods.map((period) => ({
+          id: period.id,
+          periodName: period.periodName,
+          courseName: period.courseName || "",
+        })),
+        groupName: "Groups by period",
+        groupMode: true,
+        groups: [],
+        groupsByPeriod,
         assignedStudentEmails,
         assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
-        teacherId: selectedPeriod.teacherId || profile.uid,
+        teacherId: primaryPeriod.teacherId || profile.uid,
         assignedTeacherEmail,
         assignedTeacherName:
-          selectedPeriod.teacherName ||
+          primaryPeriod.teacherName ||
           (assignedTeacherEmail === profile.email ? profile.displayName : titleFromEmail(assignedTeacherEmail)),
         teacherNotes: safeText(form.teacherNotes),
         status: "active",
@@ -1728,8 +2121,7 @@ function ProjectCreateForm({ profile, periods, setToast }) {
         title: "",
         objective: "",
         dueDate: todayISO(),
-        periodId: activePeriods[0]?.id || "",
-        groups: [newGroupDraft(1)],
+        periodIds: [],
         assignedTeacherEmail: profile.email,
         teacherNotes: "",
       });
@@ -1756,25 +2148,18 @@ function ProjectCreateForm({ profile, periods, setToast }) {
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-black text-white">Create project</h2>
-          <p className="text-sm text-slate-400">Assign a field workflow to one student or a group.</p>
+          <p className="text-sm text-slate-400">Assign one field workflow to multiple periods, then build groups per period.</p>
         </div>
         <${Badge} icon=${Plus}>New</${Badge}>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         <label className="grid gap-1 text-sm font-bold text-slate-300">
-          Class period
-          <${Select}
-            value=${form.periodId}
-            onChange=${(event) => update("periodId", event.currentTarget.value)}
-          >
-            ${activePeriods.map(
-              (period) => html`
-                <option key=${period.id} value=${period.id}>
-                  ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
-                </option>
-              `,
-            )}
-          </${Select}>
+          Class periods
+          <${MultiPeriodDropdown}
+            periods=${activePeriods}
+            selectedPeriodIds=${form.periodIds}
+            onChange=${(periodIds) => update("periodIds", periodIds)}
+          />
         </label>
         <label className="grid gap-1 text-sm font-bold text-slate-300">
           Project title
@@ -1784,51 +2169,8 @@ function ProjectCreateForm({ profile, periods, setToast }) {
           Due date
           <${TextInput} type="date" value=${form.dueDate} onInput=${(event) => update("dueDate", event.currentTarget.value)} />
         </label>
-        <div className="md:col-span-2 rounded-2xl bg-slate-950/35 p-3 ring-1 ring-slate-700/70">
-          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="font-black text-white">Project groups</h3>
-              <p className="text-sm text-slate-400">Create as many crews as this period needs.</p>
-            </div>
-            <${Button} icon=${Plus} type="button" variant="secondary" onClick=${addGroup}>
-              Add group
-            </${Button}>
-          </div>
-          <div className="grid gap-3">
-            ${form.groups.map(
-              (group, index) => html`
-                <article key=${group.id} className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
-                  <div className="grid gap-3 md:grid-cols-[1fr_2fr_auto] md:items-end">
-                    <label className="grid gap-1 text-sm font-bold text-slate-300">
-                      Group ${index + 1}
-                      <${TextInput}
-                        value=${group.name}
-                        onInput=${(event) => updateGroup(group.id, "name", event.currentTarget.value)}
-                        placeholder=${`Group ${index + 1}`}
-                      />
-                    </label>
-                    <label className="grid gap-1 text-sm font-bold text-slate-300">
-                      Student emails
-                      <${TextInput}
-                        value=${group.assignedStudents}
-                        onInput=${(event) => updateGroup(group.id, "assignedStudents", event.currentTarget.value)}
-                        placeholder="student@student.doralacademynv.org, another@student.doralacademynv.org"
-                      />
-                    </label>
-                    <${Button}
-                      icon=${Trash2}
-                      type="button"
-                      variant="ghost"
-                      disabled=${form.groups.length === 1}
-                      onClick=${() => removeGroup(group.id)}
-                    >
-                      Delete
-                    </${Button}>
-                  </div>
-                </article>
-              `,
-            )}
-          </div>
+        <div className="md:col-span-2 rounded-2xl bg-slate-950/35 p-3 text-sm leading-6 text-slate-400 ring-1 ring-slate-700/70">
+          Groups are managed per period after the project is created. Current period selections will make each period available as its own grouping tab.
         </div>
         <label className="grid gap-1 text-sm font-bold text-slate-300 md:col-span-2">
           Objective
@@ -1847,26 +2189,410 @@ function ProjectCreateForm({ profile, periods, setToast }) {
   `;
 }
 
-function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
-  const progress = projectProgress(project);
+function PeriodScopedGroupManager({ profile, project, periods, enrollments, setToast }) {
+  const periodSummaries = projectPeriodSummaries(project, periods);
+  const periodIds = periodSummaries.map((period) => period.id);
+  const [selectedPeriodId, setSelectedPeriodId] = useState(periodIds[0] || "");
+  const [openGroupId, setOpenGroupId] = useState("");
+  const [groupsByPeriod, setGroupsByPeriod] = useState(() => normalizeGroupsByPeriod(project));
   const [busy, setBusy] = useState("");
-  const [groupDrafts, setGroupDrafts] = useState(() => projectGroupDrafts(project));
-  const [groupError, setGroupError] = useState("");
-  const groupSignature = JSON.stringify(project.groups || []);
+  const [error, setError] = useState("");
+  const groupSignature = JSON.stringify(project.groupsByPeriod || project.groups || []);
 
   useEffect(() => {
-    setGroupDrafts(projectGroupDrafts(project));
-    setGroupError("");
-  }, [project.id, groupSignature, (project.assignedStudentEmails || []).join("|"), project.groupName]);
+    setGroupsByPeriod(normalizeGroupsByPeriod(project));
+  }, [project.id, groupSignature, normalizeProjectPeriodIds(project).join("|"), project.periodId]);
 
-  const updateGroupDraft = (groupId, field, value) =>
-    setGroupDrafts((current) =>
-      current.map((group) => (group.id === groupId ? { ...group, [field]: value } : group)),
+  useEffect(() => {
+    if (!periodIds.length) return;
+    if (!periodIds.includes(selectedPeriodId)) setSelectedPeriodId(periodIds[0]);
+  }, [periodIds.join("|"), selectedPeriodId]);
+
+  const selectedStudents = studentsForPeriod(enrollments, selectedPeriodId);
+  const currentGroups = normalizeGroupItems(groupsByPeriod[selectedPeriodId] || []);
+  const assignedEmails = new Set(
+    currentGroups.flatMap((group) => group.assignedStudentEmails).map(normalizeEmail),
+  );
+  const ungroupedStudents = selectedStudents.filter((student) => !assignedEmails.has(student.email));
+  const openGroup = currentGroups.find((group) => group.id === openGroupId);
+
+  useEffect(() => {
+    if (currentGroups.length && !currentGroups.some((group) => group.id === openGroupId)) {
+      setOpenGroupId(currentGroups[0].id);
+    }
+    if (!currentGroups.length && openGroupId) setOpenGroupId("");
+  }, [currentGroups.map((group) => group.id).join("|"), openGroupId]);
+
+  const persistGroups = async (nextGroupsByPeriod, action = "Updated period groups") => {
+    const normalizedGroupsByPeriod = periodIds.reduce((result, periodId) => {
+      result[periodId] = normalizeGroupItems(nextGroupsByPeriod[periodId] || []);
+      return result;
+    }, {});
+    const rosterEmails = periodIds.flatMap((periodId) =>
+      studentsForPeriod(enrollments, periodId).map((student) => student.email),
     );
-  const addGroupDraft = () =>
-    setGroupDrafts((current) => [...current, newGroupDraft(current.length + 1)]);
-  const removeGroupDraft = (groupId) =>
-    setGroupDrafts((current) => (current.length > 1 ? current.filter((group) => group.id !== groupId) : current));
+    const assignedStudentEmails = [
+      ...new Set([
+        ...rosterEmails,
+        ...groupStudentEmailsByPeriod(normalizedGroupsByPeriod),
+      ]),
+    ].filter(Boolean);
+    const firstPeriodId = periodIds[0] || project.periodId;
+    const firstPeriodGroups = normalizeGroupItems(normalizedGroupsByPeriod[firstPeriodId] || []);
+
+    setGroupsByPeriod(normalizedGroupsByPeriod);
+    setBusy("groups");
+    setError("");
+    try {
+      await saveProjectPatch(
+        project,
+        profile,
+        {
+          periodIds,
+          groupsByPeriod: normalizedGroupsByPeriod,
+          groups: firstPeriodGroups,
+          groupName: firstPeriodGroups.length ? projectGroupLabel({ groups: firstPeriodGroups }) : "Groups by period",
+          groupMode: true,
+          assignedStudentEmails,
+          assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+        },
+        action,
+      );
+      setToast("Project groups saved");
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const moveStudentToGroup = async (student, groupId) => {
+    if (!student?.email || !selectedPeriodId) return;
+    const nextGroups = currentGroups.map((group) => {
+      const withoutStudent = group.assignedStudentEmails.filter((email) => normalizeEmail(email) !== student.email);
+      if (group.id !== groupId) {
+        return {
+          ...group,
+          assignedStudentEmails: withoutStudent,
+          assignedStudentNames: withoutStudent.map(titleFromEmail),
+        };
+      }
+      const assignedStudentEmails = [...new Set([...withoutStudent, student.email])];
+      return {
+        ...group,
+        assignedStudentEmails,
+        assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+      };
+    });
+    setOpenGroupId(groupId);
+    await persistGroups({ ...groupsByPeriod, [selectedPeriodId]: nextGroups }, "Moved student group");
+  };
+
+  const removeStudentFromGroups = async (studentEmail) => {
+    const email = normalizeEmail(studentEmail);
+    const nextGroups = currentGroups.map((group) => {
+      const assignedStudentEmails = group.assignedStudentEmails.filter(
+        (assignedEmail) => normalizeEmail(assignedEmail) !== email,
+      );
+      return {
+        ...group,
+        assignedStudentEmails,
+        assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+      };
+    });
+    await persistGroups({ ...groupsByPeriod, [selectedPeriodId]: nextGroups }, "Removed student from group");
+  };
+
+  const createGroup = async (student = null) => {
+    const group = {
+      id: makeId("group"),
+      name: `Group ${currentGroups.length + 1}`,
+      assignedStudentEmails: student?.email ? [student.email] : [],
+      assignedStudentNames: student?.email ? [student.name || titleFromEmail(student.email)] : [],
+    };
+    const cleanedGroups = student?.email
+      ? currentGroups.map((existingGroup) => {
+          const assignedStudentEmails = existingGroup.assignedStudentEmails.filter(
+            (email) => normalizeEmail(email) !== student.email,
+          );
+          return {
+            ...existingGroup,
+            assignedStudentEmails,
+            assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+          };
+        })
+      : currentGroups;
+    const nextGroups = [...cleanedGroups, group];
+    setOpenGroupId(group.id);
+    await persistGroups({ ...groupsByPeriod, [selectedPeriodId]: nextGroups }, "Created group");
+  };
+
+  const deleteGroup = async (groupId) => {
+    const group = currentGroups.find((candidate) => candidate.id === groupId);
+    if (!group) return;
+    const hasStudents = group.assignedStudentEmails.length > 0;
+    const confirmed =
+      !hasStudents ||
+      window.confirm(`Delete ${group.name}? Its students will move back to the ungrouped list for this period.`);
+    if (!confirmed) return;
+
+    const nextGroups = currentGroups.filter((candidate) => candidate.id !== groupId);
+    setOpenGroupId(nextGroups[0]?.id || "");
+    await persistGroups({ ...groupsByPeriod, [selectedPeriodId]: nextGroups }, "Deleted group");
+  };
+
+  const updateGroupName = (groupId, name) => {
+    setGroupsByPeriod((current) => ({
+      ...current,
+      [selectedPeriodId]: normalizeGroupItems(current[selectedPeriodId] || []).map((group) =>
+        group.id === groupId ? { ...group, name } : group,
+      ),
+    }));
+  };
+
+  const saveGroupNames = async () => {
+    await persistGroups(groupsByPeriod, "Renamed group");
+  };
+
+  const studentFromDrag = (event) => {
+    try {
+      const data = JSON.parse(event.dataTransfer.getData("application/json") || "{}");
+      if (data.periodId !== selectedPeriodId) return null;
+      return {
+        email: normalizeEmail(data.email),
+        name: safeText(data.name) || titleFromEmail(data.email),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const startDrag = (event, student) => {
+    event.dataTransfer.setData(
+      "application/json",
+      JSON.stringify({ ...student, periodId: selectedPeriodId }),
+    );
+    event.dataTransfer.setData("text/plain", student.email);
+    event.dataTransfer.effectAllowed = "move";
+  };
+
+  if (!periodSummaries.length) {
+    return html`
+      <section className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-4">
+        <p className="font-black text-white">No periods assigned</p>
+        <p className="mt-1 text-sm text-slate-400">Assign this project to a period before managing groups.</p>
+      </section>
+    `;
+  }
+
+  return html`
+    <section className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h4 className="font-black text-white">Groups by period</h4>
+          <p className="text-sm text-slate-400">Switch periods, then drag students into one open group at a time.</p>
+        </div>
+        <${Badge} icon=${Users}>${selectedStudents.length} students</${Badge}>
+      </div>
+
+      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+        ${periodSummaries.map(
+          (summary) => html`
+            <button
+              key=${summary.id}
+              type="button"
+              className=${classNames(
+                "shrink-0 rounded-xl px-3 py-2 text-sm font-black transition",
+                selectedPeriodId === summary.id
+                  ? "bg-lens text-slate-950"
+                  : "bg-slate-900 text-slate-300 ring-1 ring-slate-700/70 hover:bg-slate-800",
+              )}
+              onClick=${() => setSelectedPeriodId(summary.id)}
+            >
+              ${periodSummaryLabel(summary)}
+            </button>
+          `,
+        )}
+      </div>
+
+      ${selectedStudents.length === 0
+        ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No students are enrolled in this period yet.</p>`
+        : html`
+            <div className="grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
+              <section className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <h5 className="font-black text-white">Ungrouped Students</h5>
+                  <${Badge} icon=${Users}>${ungroupedStudents.length}</${Badge}>
+                </div>
+                ${ungroupedStudents.length === 0
+                  ? html`<p className="rounded-xl bg-slate-900 p-3 text-sm text-slate-500">No ungrouped students.</p>`
+                  : html`
+                      <div className="grid gap-2">
+                        ${ungroupedStudents.map(
+                          (student) => html`
+                            <div
+                              key=${student.email}
+                              draggable=${true}
+                              onDragStart=${(event) => startDrag(event, student)}
+                              className="flex cursor-grab flex-col gap-2 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 sm:flex-row sm:items-center sm:justify-between"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate font-black text-white">${student.name}</p>
+                                <p className="truncate text-xs text-slate-500">${student.email}</p>
+                              </div>
+                              ${openGroup
+                                ? html`
+                                    <${Button}
+                                      type="button"
+                                      variant="ghost"
+                                      onClick=${() => moveStudentToGroup(student, openGroup.id)}
+                                    >
+                                      Add to open group
+                                    </${Button}>
+                                  `
+                                : null}
+                            </div>
+                          `,
+                        )}
+                      </div>
+                    `}
+              </section>
+
+              <section className="space-y-3">
+                ${currentGroups.length === 0
+                  ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No groups yet. Use the drop zone below to create one.</p>`
+                  : null}
+                ${currentGroups.map((group) => {
+                  const isOpen = group.id === openGroupId;
+                  const groupStudents = group.assignedStudentEmails.map((email) => ({
+                    email,
+                    name:
+                      selectedStudents.find((student) => student.email === normalizeEmail(email))?.name ||
+                      titleFromEmail(email),
+                  }));
+                  return html`
+                    <article
+                      key=${group.id}
+                      className=${classNames(
+                        "rounded-2xl border p-3 transition",
+                        isOpen
+                          ? "border-lens/45 bg-lens/10"
+                          : "border-slate-700/70 bg-slate-950/42 hover:border-lens/30",
+                      )}
+                      onDragOver=${(event) => {
+                        event.preventDefault();
+                        setOpenGroupId(group.id);
+                      }}
+                      onDrop=${(event) => {
+                        event.preventDefault();
+                        const student = studentFromDrag(event);
+                        if (student) moveStudentToGroup(student, group.id);
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 text-left"
+                        onClick=${() => setOpenGroupId(group.id)}
+                      >
+                        <span>
+                          <span className="block font-black text-white">${group.name}</span>
+                          <span className="text-xs font-semibold text-slate-500">
+                            ${groupStudents.length} student${groupStudents.length === 1 ? "" : "s"}
+                          </span>
+                        </span>
+                        <${ChevronDown}
+                          size=${18}
+                          className=${classNames("transition", isOpen ? "rotate-180 text-lens" : "text-slate-500")}
+                        />
+                      </button>
+
+                      ${isOpen
+                        ? html`
+                            <div className="mt-3 space-y-3">
+                              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                                <label className="grid gap-1 text-sm font-bold text-slate-300">
+                                  Group name
+                                  <${TextInput}
+                                    value=${group.name}
+                                    onInput=${(event) => updateGroupName(group.id, event.currentTarget.value)}
+                                    onBlur=${saveGroupNames}
+                                  />
+                                </label>
+                                <${Button}
+                                  icon=${Trash2}
+                                  type="button"
+                                  variant="ghost"
+                                  onClick=${() => deleteGroup(group.id)}
+                                >
+                                  Delete group
+                                </${Button}>
+                              </div>
+                              <div className="min-h-24 rounded-2xl border border-dashed border-lens/35 bg-slate-950/35 p-3">
+                                ${groupStudents.length === 0
+                                  ? html`<p className="text-sm text-slate-500">Drop students here or use the fallback button.</p>`
+                                  : html`
+                                      <div className="grid gap-2">
+                                        ${groupStudents.map(
+                                          (student) => html`
+                                            <div
+                                              key=${student.email}
+                                              draggable=${true}
+                                              onDragStart=${(event) => startDrag(event, student)}
+                                              className="flex cursor-grab flex-col gap-2 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 sm:flex-row sm:items-center sm:justify-between"
+                                            >
+                                              <div className="min-w-0">
+                                                <p className="truncate font-black text-white">${student.name}</p>
+                                                <p className="truncate text-xs text-slate-500">${student.email}</p>
+                                              </div>
+                                              <${Button}
+                                                type="button"
+                                                variant="ghost"
+                                                onClick=${() => removeStudentFromGroups(student.email)}
+                                              >
+                                                Remove
+                                              </${Button}>
+                                            </div>
+                                          `,
+                                        )}
+                                      </div>
+                                    `}
+                              </div>
+                            </div>
+                          `
+                        : null}
+                    </article>
+                  `;
+                })}
+
+                <button
+                  type="button"
+                  className="flex min-h-24 w-full items-center justify-center rounded-2xl border border-dashed border-slate-600/80 bg-transparent p-4 text-sm font-black text-slate-400 transition hover:border-lens/60 hover:text-lens"
+                  onClick=${() => createGroup()}
+                  onDragOver=${(event) => event.preventDefault()}
+                  onDrop=${(event) => {
+                    event.preventDefault();
+                    const student = studentFromDrag(event);
+                    if (student) createGroup(student);
+                  }}
+                >
+                  Add new group?
+                </button>
+              </section>
+            </div>
+          `}
+
+      ${busy ? html`<p className="mt-3 text-sm font-bold text-lens">Saving groups...</p>` : null}
+      ${error ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
+    </section>
+  `;
+}
+
+function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, periods, enrollments }) {
+  const progress = projectProgress(project);
+  const [busy, setBusy] = useState("");
+  const periodSummaries = projectPeriodSummaries(project, periods);
+  const periodCount = periodSummaries.length;
+  const studentCount = (project.assignedStudentEmails || []).length;
 
   const updateStatus = async (status) => {
     setBusy(`status-${status}`);
@@ -1898,106 +2624,38 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent }) {
     }
   };
 
-  const saveGroups = async () => {
-    setGroupError("");
-    const groups = serializeGroupDrafts(groupDrafts);
-    const assignedStudentEmails = groupStudentEmails(groups);
-    if (assignedStudentEmails.some((email) => !isAllowedDoralEmail(email))) {
-      setGroupError("Student emails must use Doral accounts.");
-      return;
-    }
-    setBusy("groups");
-    try {
-      await saveProjectPatch(
-        project,
-        profile,
-        {
-          groups,
-          groupName: projectGroupLabel({ groups, groupName: project.periodName || "Production Group" }),
-          groupMode: groups.length > 1,
-          assignedStudentEmails,
-          assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
-        },
-        "Updated project groups",
-      );
-      setToast("Project groups saved");
-    } catch (saveError) {
-      setGroupError(saveError.message);
-    } finally {
-      setBusy("");
-    }
-  };
-
   return html`
     <article className="vp-panel rounded-3xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-lg font-black text-white">${project.title}</h3>
-          <p className="mt-1 text-sm text-slate-400">${projectGroupLabel(project)} - Due ${toDateLabel(project.dueDate)}</p>
+          <p className="mt-1 text-sm text-slate-400">${projectPeriodLabel(project, periods)} - Due ${toDateLabel(project.dueDate)}</p>
         </div>
         <${Badge} icon=${Gauge}>${progress.percent}%</${Badge}>
       </div>
       <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-300">${project.objective}</p>
       <div className="mt-3 flex flex-wrap gap-2">
-        ${project.periodName ? html`<${Badge} icon=${LayoutGrid}>${project.periodName}</${Badge}>` : null}
-        <${Badge} icon=${Users}>${(project.assignedStudentEmails || []).length} students</${Badge}>
+        ${periodCount
+          ? html`
+              <${Badge} icon=${LayoutGrid}>
+                ${periodCount === 1 ? periodSummaryLabel(periodSummaries[0]) : `${periodCount} periods`}
+              </${Badge}>
+            `
+          : null}
+        <${Badge} icon=${Users}>${studentCount} students</${Badge}>
         <${Badge} icon=${UserCog}>${project.assignedTeacherEmail}</${Badge}>
         <${Badge} icon=${Radio}>${project.status}</${Badge}>
       </div>
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-950/70">
         <div className="h-full rounded-full bg-lens" style=${{ width: `${progress.percent}%` }}></div>
       </div>
-      <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h4 className="font-black text-white">Groups</h4>
-            <p className="text-sm text-slate-400">Add, edit, or delete the crews working this project.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <${Button} icon=${Plus} type="button" variant="ghost" onClick=${addGroupDraft}>
-              Add group
-            </${Button}>
-            <${Button} icon=${Save} type="button" variant="secondary" disabled=${busy === "groups"} onClick=${saveGroups}>
-              ${busy === "groups" ? "Saving..." : "Save groups"}
-            </${Button}>
-          </div>
-        </div>
-        <div className="grid gap-3">
-          ${groupDrafts.map(
-            (group, index) => html`
-              <article key=${group.id} className="rounded-2xl border border-slate-700/70 bg-slate-950/45 p-3">
-                <div className="grid gap-3 md:grid-cols-[1fr_2fr_auto] md:items-end">
-                  <label className="grid gap-1 text-sm font-bold text-slate-300">
-                    Group ${index + 1}
-                    <${TextInput}
-                      value=${group.name}
-                      onInput=${(event) => updateGroupDraft(group.id, "name", event.currentTarget.value)}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm font-bold text-slate-300">
-                    Student emails
-                    <${TextInput}
-                      value=${group.assignedStudents}
-                      onInput=${(event) => updateGroupDraft(group.id, "assignedStudents", event.currentTarget.value)}
-                      placeholder="student@student.doralacademynv.org"
-                    />
-                  </label>
-                  <${Button}
-                    icon=${Trash2}
-                    type="button"
-                    variant="ghost"
-                    disabled=${groupDrafts.length === 1}
-                    onClick=${() => removeGroupDraft(group.id)}
-                  >
-                    Delete
-                  </${Button}>
-                </div>
-              </article>
-            `,
-          )}
-        </div>
-        ${groupError ? html`<p className="mt-3 rounded-xl bg-alert/10 p-3 text-sm text-red-200">${groupError}</p>` : null}
-      </div>
+      <${PeriodScopedGroupManager}
+        profile=${profile}
+        project=${project}
+        periods=${periods}
+        enrollments=${enrollments}
+        setToast=${setToast}
+      />
       <div className="mt-4 flex flex-wrap gap-2">
         ${isVideoAdmin(profile)
           ? html`
@@ -3456,6 +4114,7 @@ function VideoProductionApp() {
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
         periods=${periods}
+        enrollments=${enrollments}
       />
     `;
   } else if (activeView === "users" && isVideoAdmin(profile)) {

@@ -291,6 +291,14 @@ service cloud.firestore {
         && request.resource.data.assignedTeacherEmail.matches('^[^@]+@doralacademynv\\.org$')
         && request.resource.data.assignedStudentEmails is list
         && request.resource.data.periodId is string
+        && (
+          !request.resource.data.keys().hasAny(["periodIds"])
+          || (
+            request.resource.data.periodIds is list
+            && request.resource.data.periodIds.size() > 0
+            && request.resource.data.periodIds.hasAll([request.resource.data.periodId])
+          )
+        )
         && validVideoProjectStatus(request.resource.data.status);
     }
 
@@ -621,6 +629,17 @@ service cloud.firestore {
         );
       allow create: if isVideoAdmin()
         && validManualPeriodEnrollment(enrollmentId)
+        && exists(periodPath(request.resource.data.periodId))
+        && get(periodPath(request.resource.data.periodId)).data.active == true
+        && get(periodPath(request.resource.data.periodId)).data.archived == false
+        && get(periodPath(request.resource.data.periodId)).data.periodName == request.resource.data.periodName
+        && get(periodPath(request.resource.data.periodId)).data.courseName == request.resource.data.courseName
+        && get(periodPath(request.resource.data.periodId)).data.teacherId == request.resource.data.teacherId
+        && get(periodPath(request.resource.data.periodId)).data.teacherEmail == request.resource.data.teacherEmail
+        && get(periodPath(request.resource.data.periodId)).data.teacherName == request.resource.data.teacherName;
+      allow create: if isVideoTeacher()
+        && validManualPeriodEnrollment(enrollmentId)
+        && canManagePeriodId(request.resource.data.periodId)
         && exists(periodPath(request.resource.data.periodId))
         && get(periodPath(request.resource.data.periodId)).data.active == true
         && get(periodPath(request.resource.data.periodId)).data.archived == false
