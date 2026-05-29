@@ -51,6 +51,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onAuthStateChanged,
   onSnapshot,
   provider,
@@ -308,6 +309,28 @@ function demoStudentEmail(name, demoPeriod) {
   return `${slugFromName(name)}.p${demoPeriod.number}.demo${DORAL_STUDENT_DOMAIN}`;
 }
 
+function isPeriodArchived(period) {
+  return Boolean(period?.archived || period?.isArchived || period?.status === "archived");
+}
+
+function normalizePeriodArchiveState(period) {
+  const archived = isPeriodArchived(period);
+  return {
+    archived,
+    active: archived ? false : period?.active !== false,
+    archivedAt: period?.archivedAt || "",
+    archivedBy: safeText(period?.archivedBy),
+  };
+}
+
+function getActivePeriods(periods = []) {
+  return periods.filter((period) => period.active !== false && !isPeriodArchived(period));
+}
+
+function getArchivedPeriods(periods = []) {
+  return periods.filter((period) => isPeriodArchived(period));
+}
+
 function normalizeJoinCode(code) {
   return safeText(code).toUpperCase().replace(/\s+/g, "");
 }
@@ -494,16 +517,23 @@ function projectBelongsToPeriod(project, periodId) {
 
 function projectPeriodSummaries(project, periods = []) {
   const periodMap = new Map(periods.map((period) => [period.id, period]));
+  const savedSummaryMap = new Map(
+    (Array.isArray(project?.periodSummaries) ? project.periodSummaries : [])
+      .map((summary) => [summary.id, summary]),
+  );
   return normalizeProjectPeriodIds(project).map((periodId, index) => {
     const period = periodMap.get(periodId);
+    const savedSummary = savedSummaryMap.get(periodId);
     return {
       id: periodId,
       periodName:
         period?.periodName ||
+        savedSummary?.periodName ||
         (periodId === project?.periodId ? project?.periodName : "") ||
-        `Period ${index + 1}`,
+        "Deleted period",
       courseName:
         period?.courseName ||
+        savedSummary?.courseName ||
         (periodId === project?.periodId ? project?.courseName : "") ||
         "",
     };
@@ -741,14 +771,14 @@ function useVideoAuthProfile() {
 }
 
 function cleanPeriod(period) {
+  const archiveState = normalizePeriodArchiveState(period);
   return {
     ...period,
     periodName: safeText(period?.periodName) || "Untitled Period",
     courseName: safeText(period?.courseName),
     joinCode: normalizeJoinCode(period?.joinCode),
     joinCodeLowercase: joinCodeLowercase(period?.joinCode || period?.joinCodeLowercase),
-    active: period?.active !== false,
-    archived: Boolean(period?.archived),
+    ...archiveState,
   };
 }
 
@@ -780,13 +810,31 @@ function studentsForPeriod(enrollments, periodId) {
   }));
 }
 
-function usePeriods(profile) {
+function usePeriods(profile, enrollments = []) {
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const studentPeriodIds = useMemo(
+    () => [
+      ...new Set(
+        enrollments
+          .filter((enrollment) => enrollment.active !== false)
+          .map((enrollment) => safeText(enrollment.periodId))
+          .filter(Boolean),
+      ),
+    ],
+    [enrollments],
+  );
 
   useEffect(() => {
-    if (!isVideoAdmin(profile) && !isVideoTeacher(profile)) {
+    if (!isVideoAdmin(profile) && !isVideoTeacher(profile) && !isVideoStudent(profile)) {
+      setPeriods([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    if (isVideoStudent(profile) && !studentPeriodIds.length) {
       setPeriods([]);
       setLoading(false);
       setError("");
@@ -795,9 +843,37 @@ function usePeriods(profile) {
 
     setLoading(true);
     const periodsRef = collection(db, "periods");
-    const request = isVideoAdmin(profile)
-      ? periodsRef
-      : query(periodsRef, where("teacherId", "==", profile.uid));
+    if (isVideoStudent(profile)) {
+      const periodMap = new Map();
+      const syncPeriods = () => {
+        setPeriods(
+          [...periodMap.values()].sort((a, b) =>
+            safeText(a.courseName).localeCompare(safeText(b.courseName)) ||
+            safeText(a.periodName).localeCompare(safeText(b.periodName)),
+          ),
+        );
+        setError("");
+        setLoading(false);
+      };
+      const unsubscribes = studentPeriodIds.map((periodId) =>
+        onSnapshot(
+          doc(db, "periods", periodId),
+          (snapshot) => {
+            if (snapshot.exists()) periodMap.set(periodId, cleanPeriod({ id: snapshot.id, ...snapshot.data() }));
+            else periodMap.delete(periodId);
+            syncPeriods();
+          },
+          (snapshotError) => {
+            setError(snapshotError.message);
+            setLoading(false);
+          },
+        ),
+      );
+
+      return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+    }
+
+    const request = isVideoAdmin(profile) ? periodsRef : query(periodsRef, where("teacherId", "==", profile.uid));
 
     const unsubscribe = onSnapshot(
       request,
@@ -806,8 +882,8 @@ function usePeriods(profile) {
           snapshot.docs
             .map((item) => cleanPeriod({ id: item.id, ...item.data() }))
             .sort((a, b) => {
-              const activeA = a.active && !a.archived ? 0 : 1;
-              const activeB = b.active && !b.archived ? 0 : 1;
+              const activeA = getActivePeriods([a]).length ? 0 : 1;
+              const activeB = getActivePeriods([b]).length ? 0 : 1;
               return (
                 activeA - activeB ||
                 safeText(a.courseName).localeCompare(safeText(b.courseName)) ||
@@ -825,7 +901,7 @@ function usePeriods(profile) {
     );
 
     return unsubscribe;
-  }, [profile?.email, profile?.role, profile?.uid]);
+  }, [profile?.email, profile?.role, profile?.uid, studentPeriodIds.join("|")]);
 
   return { periods, loading, error };
 }
@@ -877,20 +953,22 @@ function usePeriodEnrollments(profile) {
   return { enrollments, loading, error };
 }
 
-function useVideoProjects(profile, enrollments = []) {
+function useVideoProjects(profile, enrollments = [], periods = []) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const activePeriodIds = useMemo(() => new Set(getActivePeriods(periods).map((period) => period.id)), [periods]);
   const studentPeriodIds = useMemo(
     () => [
       ...new Set(
         enrollments
           .filter((enrollment) => enrollment.active !== false)
           .map((enrollment) => safeText(enrollment.periodId))
+          .filter((periodId) => activePeriodIds.has(periodId))
           .filter(Boolean),
       ),
     ],
-    [enrollments],
+    [enrollments, periods, activePeriodIds],
   );
 
   useEffect(() => {
@@ -1347,7 +1425,7 @@ function MonitorDashboard({
   onPreviewPeriod,
 }) {
   const [interestIndex, setInterestIndex] = useState(0);
-  const activePeriods = periods.filter((period) => period.active && !period.archived);
+  const activePeriods = getActivePeriods(periods);
   const selectedPeriod = activePeriods.find((period) => period.id === selectedPeriodId);
   const activeProjects = projects
     .filter((project) => project.status !== "archived")
@@ -1507,9 +1585,12 @@ function ProjectMonitorCard({ project, enrollments, profileByEmail, interestInde
   `;
 }
 
-function PeriodManager({ profile, periods, enrollments, loading, error, setToast }) {
+function PeriodManager({ profile, periods, enrollments, projects, loading, error, setToast }) {
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedSummary, setSeedSummary] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const activePeriods = getActivePeriods(periods);
+  const archivedPeriods = getArchivedPeriods(periods);
 
   // No "remove demo roster" action is exposed: demo periods use the same period/enrollment
   // model as class data, and teachers may attach practice projects to them. Deterministic
@@ -1625,7 +1706,7 @@ function PeriodManager({ profile, periods, enrollments, loading, error, setToast
           <${Button} icon=${Sparkles} variant="secondary" disabled=${seedBusy} onClick=${seedDemoRoster}>
             ${seedBusy ? "Seeding..." : "Seed Demo Roster"}
           </${Button}>
-          <${Badge} icon=${LayoutGrid}>${periods.filter((period) => period.active && !period.archived).length} active</${Badge}>
+          <${Badge} icon=${LayoutGrid}>${activePeriods.length} active</${Badge}>
         </div>
       </div>
 
@@ -1638,11 +1719,11 @@ function PeriodManager({ profile, periods, enrollments, loading, error, setToast
       ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
       ${loading
         ? html`<${EmptyState} icon=${LayoutGrid} title="Loading periods" />`
-        : periods.length === 0
-          ? html`<${EmptyState} icon=${LayoutGrid} title="No periods yet" body="Create your first period to generate a student join code." />`
+        : activePeriods.length === 0
+          ? html`<${EmptyState} icon=${LayoutGrid} title="No active periods" body="Create a period or restore an archived class to make it available in active workflows." />`
           : html`
               <div className="grid gap-4 xl:grid-cols-2">
-                ${periods.map(
+                ${activePeriods.map(
                   (period) => html`
                     <${PeriodCard}
                       key=${period.id}
@@ -1655,6 +1736,29 @@ function PeriodManager({ profile, periods, enrollments, loading, error, setToast
                 )}
               </div>
             `}
+
+      <div className="flex justify-center border-t border-slate-800/80 pt-5">
+        <${Button}
+          icon=${Archive}
+          variant="ghost"
+          type="button"
+          onClick=${() => setShowArchived((current) => !current)}
+        >
+          ${showArchived ? "Hide Archived Classes" : "View Archived Classes"}
+        </${Button}>
+      </div>
+
+      ${showArchived
+        ? html`
+            <${ArchivedPeriodsPanel}
+              profile=${profile}
+              periods=${archivedPeriods}
+              enrollments=${enrollments}
+              projects=${projects}
+              setToast=${setToast}
+            />
+          `
+        : null}
     </section>
   `;
 }
@@ -1801,6 +1905,8 @@ function PeriodCard({ profile, period, enrollments, setToast }) {
       await updateDoc(doc(db, "periods", period.id), {
         active: false,
         archived: true,
+        archivedAt: serverTimestamp(),
+        archivedBy: profile.email,
         updatedAt: serverTimestamp(),
       });
       if (period.joinCodeLowercase) {
@@ -1918,6 +2024,217 @@ function PeriodCard({ profile, period, enrollments, setToast }) {
   `;
 }
 
+function ArchivedPeriodsPanel({ profile, periods, enrollments, projects, setToast }) {
+  return html`
+    <section className="vp-panel rounded-3xl border border-warning/30 p-4 sm:p-5">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-warning">Archived Classes</p>
+          <h2 className="mt-1 text-2xl font-black text-white">Inactive class periods</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+            These classes are hidden from active workflows, joins, project assignment, and monitor selectors.
+          </p>
+        </div>
+        <${Badge} icon=${Archive}>${periods.length} archived</${Badge}>
+      </div>
+
+      ${periods.length === 0
+        ? html`<${EmptyState} icon=${Archive} title="No archived classes." body="Archived periods will appear here after you archive them." />`
+        : html`
+            <div className="grid gap-4 xl:grid-cols-2">
+              ${periods.map(
+                (period) => html`
+                  <${ArchivedPeriodCard}
+                    key=${period.id}
+                    profile=${profile}
+                    period=${period}
+                    enrollments=${activeEnrollmentsForPeriod(enrollments, period.id)}
+                    periodEnrollments=${enrollments.filter((enrollment) => enrollment.periodId === period.id)}
+                    projects=${projects}
+                    setToast=${setToast}
+                  />
+                `,
+              )}
+            </div>
+          `}
+    </section>
+  `;
+}
+
+function ArchivedPeriodCard({ profile, period, enrollments, periodEnrollments, projects, setToast }) {
+  const [busy, setBusy] = useState("");
+  const activeEnrollments = activeEnrollmentsForPeriod(enrollments, period.id);
+
+  const restorePeriod = async () => {
+    setBusy("restore");
+    try {
+      await updateDoc(doc(db, "periods", period.id), {
+        active: true,
+        archived: false,
+        archivedAt: "",
+        archivedBy: "",
+        updatedAt: serverTimestamp(),
+      });
+      if (period.joinCodeLowercase) {
+        await setDoc(
+          doc(db, "periodJoinCodes", period.joinCodeLowercase),
+          { active: true, updatedAt: serverTimestamp() },
+          { merge: true },
+        );
+      }
+      setToast(`${period.periodName} restored`);
+    } catch (restoreError) {
+      setToast(restoreError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const removeDeletedPeriodFromProjects = async () => {
+    const handledProjectIds = new Set();
+    for (const project of projects.filter((candidate) => projectBelongsToPeriod(candidate, period.id))) {
+      if (handledProjectIds.has(project.id)) continue;
+      handledProjectIds.add(project.id);
+      const periodIds = normalizeProjectPeriodIds(project);
+      if (periodIds.length <= 1) continue;
+
+      const remainingPeriodIds = periodIds.filter((periodId) => periodId !== period.id);
+      if (!remainingPeriodIds.length) continue;
+
+      const remainingSummaries = projectPeriodSummaries(project, []).filter(
+        (summary) => summary.id !== period.id,
+      );
+      const nextPrimaryPeriodId =
+        project.periodId === period.id ? remainingPeriodIds[0] : project.periodId;
+      const nextPrimarySummary =
+        remainingSummaries.find((summary) => summary.id === nextPrimaryPeriodId) ||
+        remainingSummaries[0];
+      const nextGroupsByPeriod = { ...(project.groupsByPeriod || {}) };
+      delete nextGroupsByPeriod[period.id];
+
+      try {
+        await updateDoc(doc(db, "videoProjects", project.id), {
+          periodIds: remainingPeriodIds,
+          periodId: nextPrimaryPeriodId,
+          periodName: nextPrimarySummary?.periodName || "Deleted period",
+          courseName: nextPrimarySummary?.courseName || "",
+          periodNames: remainingSummaries.map(periodSummaryLabel),
+          periodSummaries: remainingSummaries,
+          groupsByPeriod: nextGroupsByPeriod,
+          updatedAt: serverTimestamp(),
+          lastActivityAt: serverTimestamp(),
+          lastActivityBy: profile.email,
+        });
+      } catch {
+        // Leave the project in place if permissions or legacy data prevent cleanup.
+        // Project display helpers handle missing period records without crashing.
+      }
+    }
+  };
+
+  const deletePermanently = async () => {
+    if (!isPeriodArchived(period)) {
+      setToast("Only archived classes can be permanently deleted.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete "${period.periodName}" permanently? This cannot be undone. Student and teacher user accounts will not be deleted.`,
+    );
+    if (!confirmed) return;
+
+    setBusy("delete");
+    try {
+      await removeDeletedPeriodFromProjects();
+
+      let codeDocuments = [];
+      try {
+        const codeConstraints = isVideoAdmin(profile)
+          ? [where("periodId", "==", period.id)]
+          : [where("periodId", "==", period.id), where("teacherId", "==", profile.uid)];
+        const codeSnapshot = await getDocs(query(collection(db, "periodJoinCodes"), ...codeConstraints));
+        codeDocuments = codeSnapshot.docs;
+      } catch {
+        codeDocuments = [];
+      }
+
+      // The current data model stores period-related records in top-level collections,
+      // not subcollections under periods/{periodId}; those direct records are cleaned here.
+      for (const enrollment of periodEnrollments) {
+        await deleteDoc(doc(db, "periodEnrollments", enrollment.id));
+      }
+      for (const codeDocument of codeDocuments) {
+        await deleteDoc(doc(db, "periodJoinCodes", codeDocument.id));
+      }
+      if (period.joinCodeLowercase && !codeDocuments.some((item) => item.id === period.joinCodeLowercase)) {
+        try {
+          await deleteDoc(doc(db, "periodJoinCodes", period.joinCodeLowercase));
+        } catch {
+          // Old or missing join-code docs should not block deleting the archived period.
+        }
+      }
+      await deleteDoc(doc(db, "periods", period.id));
+      setToast(`${period.periodName} permanently deleted`);
+    } catch (deleteError) {
+      setToast(deleteError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return html`
+    <article className="rounded-3xl border border-slate-700/70 bg-slate-950/35 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-warning">
+            ${period.courseName || "Course"}
+          </p>
+          <h3 className="mt-1 truncate text-xl font-black text-white">${period.periodName}</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Archived ${timestampLabel(period.archivedAt)}${period.archivedBy ? ` by ${period.archivedBy}` : ""}
+          </p>
+        </div>
+        <${Badge} icon=${Archive}>Archived</${Badge}>
+      </div>
+
+      <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
+        <div className="rounded-2xl bg-slate-950/50 p-3 ring-1 ring-slate-700/70">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Join code</p>
+          <p className="mt-1 select-all font-black text-white">${period.joinCode || "No code"}</p>
+        </div>
+        <div className="rounded-2xl bg-slate-950/50 p-3 ring-1 ring-slate-700/70">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Owner</p>
+          <p className="mt-1 truncate font-black text-white">${period.teacherName || period.teacherEmail || "Unknown"}</p>
+        </div>
+        <div className="rounded-2xl bg-slate-950/50 p-3 ring-1 ring-slate-700/70 sm:col-span-2">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Members</p>
+          <p className="mt-1 font-black text-white">${activeEnrollments.length} enrolled student${activeEnrollments.length === 1 ? "" : "s"}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <${Button}
+          icon=${RefreshCcw}
+          type="button"
+          variant="secondary"
+          disabled=${Boolean(busy)}
+          onClick=${restorePeriod}
+        >
+          ${busy === "restore" ? "Restoring..." : "Restore"}
+        </${Button}>
+        <${Button}
+          icon=${Trash2}
+          type="button"
+          variant="danger"
+          disabled=${Boolean(busy)}
+          onClick=${deletePermanently}
+        >
+          ${busy === "delete" ? "Deleting..." : "Delete Permanently"}
+        </${Button}>
+      </div>
+    </article>
+  `;
+}
+
 function ProjectManager({ profile, projects, loading, error, setToast, onPreviewStudent, periods, enrollments }) {
   return html`
     <section className="space-y-5">
@@ -2017,7 +2334,7 @@ function MultiPeriodDropdown({ periods, selectedPeriodIds, onChange }) {
 }
 
 function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
-  const activePeriods = periods.filter((period) => period.active && !period.archived);
+  const activePeriods = getActivePeriods(periods);
   const [form, setForm] = useState(() => ({
     title: "",
     objective: "",
@@ -2791,12 +3108,17 @@ function StudentFilmingHome({
   loading,
   error,
   enrollments,
+  periods,
   enrollmentsLoading,
   enrollmentsError,
+  periodsLoading,
   setToast,
   setKioskActive,
 }) {
-  const activeEnrollments = enrollments.filter((enrollment) => enrollment.active !== false);
+  const activePeriodIds = new Set(getActivePeriods(periods).map((period) => period.id));
+  const activeEnrollments = enrollments.filter(
+    (enrollment) => enrollment.active !== false && activePeriodIds.has(enrollment.periodId),
+  );
   const activeProjects = projects.filter((project) => project.status !== "archived");
   const [selectedProjectId, setSelectedProjectId] = useState(() =>
     window.sessionStorage.getItem("videoStudio.selectedProjectId") || "",
@@ -2812,7 +3134,7 @@ function StudentFilmingHome({
 
   const selectedProject = activeProjects.find((project) => project.id === selectedProjectId);
 
-  if (enrollmentsLoading) return html`<${EmptyState} icon=${LayoutGrid} title="Checking period enrollment" />`;
+  if (enrollmentsLoading || periodsLoading) return html`<${EmptyState} icon=${LayoutGrid} title="Checking period enrollment" />`;
   if (enrollmentsError) return html`<${EmptyState} icon=${AlertTriangle} title="Enrollment error" body=${enrollmentsError} />`;
   if (!activeEnrollments.length) {
     return html`<${StudentJoinPeriod} profile=${profile} setToast=${setToast} />`;
@@ -3616,7 +3938,7 @@ function StudentProfileEditor({ profile, setToast }) {
 }
 
 function ManualPeriodEnrollmentForm({ profile, periods, enrollments, setToast }) {
-  const activePeriods = periods.filter((period) => period.active && !period.archived);
+  const activePeriods = getActivePeriods(periods);
   const [form, setForm] = useState(() => ({
     email: "",
     studentName: "",
@@ -3955,15 +4277,16 @@ function VideoProductionApp() {
   );
   const [toast, setToast] = useState("");
   const [kioskActive, setKioskActive] = useState(false);
-  const { periods, loading: periodsLoading, error: periodsError } = usePeriods(profile);
   const {
     enrollments,
     loading: enrollmentsLoading,
     error: enrollmentsError,
   } = usePeriodEnrollments(profile);
+  const { periods, loading: periodsLoading, error: periodsError } = usePeriods(profile, enrollments);
   const { projects, loading: projectsLoading, error: projectsError } = useVideoProjects(
     profile,
     enrollments,
+    periods,
   );
   const { users, loading: usersLoading, error: usersError } = useVideoUsers(isVideoAdmin(profile));
   const { profiles: studentProfiles, error: profilesError } = useVideoStudentProfiles(
@@ -3988,7 +4311,7 @@ function VideoProductionApp() {
     if (!isVideoAdmin(profile) && !isVideoTeacher(profile)) setPreviewPeriodId("");
   }, [profile?.role]);
 
-  const activeTeacherPeriods = periods.filter((period) => period.active && !period.archived);
+  const activeTeacherPeriods = getActivePeriods(periods);
 
   useEffect(() => {
     if (!isVideoAdmin(profile) && !isVideoTeacher(profile)) {
@@ -4022,10 +4345,10 @@ function VideoProductionApp() {
     : null;
   const previewPeriod =
     isVideoAdmin(profile) || isVideoTeacher(profile)
-      ? periods.find((period) => period.id === previewPeriodId)
+      ? getActivePeriods(periods).find((period) => period.id === previewPeriodId)
       : null;
   const previewPeriodProjects = previewPeriod
-    ? projects.filter((project) => project.periodId === previewPeriod.id)
+    ? projects.filter((project) => projectBelongsToPeriod(project, previewPeriod.id))
     : [];
   const selectView = (nextView) => {
     setPreviewProjectId("");
@@ -4063,8 +4386,10 @@ function VideoProductionApp() {
         loading=${projectsLoading}
         error=${projectsError}
         enrollments=${enrollments}
+        periods=${periods}
         enrollmentsLoading=${enrollmentsLoading}
         enrollmentsError=${enrollmentsError}
+        periodsLoading=${periodsLoading}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
       />
@@ -4095,6 +4420,7 @@ function VideoProductionApp() {
         profile=${profile}
         periods=${periods}
         enrollments=${enrollments}
+        projects=${projects}
         loading=${periodsLoading}
         error=${periodsError || enrollmentsError}
         setToast=${setToast}

@@ -314,6 +314,8 @@ service cloud.firestore {
           "joinCodeLowercase",
           "active",
           "archived",
+          "archivedAt",
+          "archivedBy",
           "createdAt",
           "updatedAt"
         ])
@@ -326,7 +328,16 @@ service cloud.firestore {
         && request.resource.data.joinCode is string
         && request.resource.data.joinCodeLowercase is string
         && request.resource.data.active is bool
-        && request.resource.data.archived is bool;
+        && request.resource.data.archived is bool
+        && (
+          !request.resource.data.keys().hasAny(["archivedAt"])
+          || request.resource.data.archivedAt is timestamp
+          || request.resource.data.archivedAt is string
+        )
+        && (
+          !request.resource.data.keys().hasAny(["archivedBy"])
+          || request.resource.data.archivedBy is string
+        );
     }
 
     function validPeriodJoinCode(codeId) {
@@ -592,14 +603,21 @@ service cloud.firestore {
           "joinCodeLowercase",
           "active",
           "archived",
+          "archivedAt",
+          "archivedBy",
           "updatedAt"
         ]);
-      allow delete: if isVideoAdmin();
+      allow delete: if resource.data.archived == true
+        && (
+          isVideoAdmin()
+          || (isVideoTeacher() && resource.data.teacherId == request.auth.uid)
+        );
     }
 
     match /periodJoinCodes/{codeId} {
       allow get: if hasVideoAccess();
-      allow list: if isVideoAdmin();
+      allow list: if isVideoAdmin()
+        || (isVideoTeacher() && resource.data.teacherId == request.auth.uid);
       allow create: if isVideoAdmin()
         && validPeriodJoinCode(codeId)
         && canManagePeriodId(request.resource.data.periodId);
@@ -614,7 +632,8 @@ service cloud.firestore {
         && validPeriodJoinCode(codeId)
         && request.resource.data.periodId == resource.data.periodId
         && request.resource.data.teacherId == resource.data.teacherId;
-      allow delete: if isVideoAdmin();
+      allow delete: if isVideoAdmin()
+        || (isVideoTeacher() && resource.data.teacherId == request.auth.uid);
     }
 
     match /periodEnrollments/{enrollmentId} {
@@ -670,7 +689,8 @@ service cloud.firestore {
           "active",
           "removedAt"
         ]);
-      allow delete: if isVideoAdmin();
+      allow delete: if isVideoAdmin()
+        || (isVideoTeacher() && resource.data.teacherId == request.auth.uid);
     }
 
     match /videoProjects/{projectId} {
@@ -688,7 +708,14 @@ service cloud.firestore {
       allow update: if isAssignedVideoTeacher(resource.data)
         && validVideoProjectBase()
         && request.resource.data.assignedTeacherEmail == resource.data.assignedTeacherEmail
-        && request.resource.data.periodId == resource.data.periodId
+        && (
+          request.resource.data.periodId == resource.data.periodId
+          || (
+            exists(periodPath(resource.data.periodId))
+            && get(periodPath(resource.data.periodId)).data.archived == true
+            && get(periodPath(resource.data.periodId)).data.teacherId == request.auth.uid
+          )
+        )
         && canManagePeriodId(request.resource.data.periodId);
       allow update: if isAssignedVideoStudent(resource.data)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
