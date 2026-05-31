@@ -1958,7 +1958,7 @@ function MonitorDashboard({
             : monitorItems.length === 0
               ? html`<${EmptyState} icon=${Users} title="No groups for this period" body="Create groups for the selected period before monitoring group progress." />`
           : html`
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 ${monitorItems.map(
                   (item) => html`
                     <${ProjectMonitorCard}
@@ -1991,51 +1991,51 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
     : "No student profile interests shared yet.";
 
   return html`
-    <article className="vp-panel vp-fade rounded-3xl p-4" style=${progressTone(progress.percent)}>
+    <article className="vp-panel vp-fade rounded-2xl p-3" style=${progressTone(progress.percent)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">${period?.periodName || workflow.periodName}</p>
-          <h2 className="mt-1 truncate text-xl font-black text-white">${project.title}</h2>
-          <p className="mt-1 text-sm font-black text-lens">${group.name}</p>
-          <p className="mt-1 text-sm text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
+          <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">${period?.periodName || workflow.periodName}</p>
+          <h2 className="mt-1 truncate text-lg font-black text-white">${project.title}</h2>
+          <p className="text-sm font-black text-lens">${group.name}</p>
+          <p className="text-xs text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
         </div>
-        <div className="rounded-2xl bg-slate-950/50 px-3 py-2 text-right ring-1 ring-white/10">
-          <p className="text-2xl font-black text-white">${progress.percent}%</p>
+        <div className="rounded-xl bg-slate-950/50 px-2.5 py-2 text-right ring-1 ring-white/10">
+          <p className="text-xl font-black text-white">${progress.percent}%</p>
           <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">complete</p>
         </div>
       </div>
 
-      <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-950/70 ring-1 ring-white/10">
+      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-950/70 ring-1 ring-white/10">
         <div className="h-full rounded-full bg-white transition-all duration-500" style=${{ width: `${progress.percent}%` }}></div>
       </div>
 
-      <div className="mt-4 grid gap-3 text-sm text-slate-300">
-        <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Current task</p>
-          <p className="mt-1 font-black text-white">${workflow.currentTask || "Equipment pickup"}</p>
+      <div className="mt-3 grid gap-2 text-sm text-slate-300">
+        <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Current task</p>
+          <p className="mt-0.5 font-black text-white">${workflow.currentTask || "Equipment pickup"}</p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Status</p>
-            <p className="mt-1 font-black text-white">${workflow.filmingStatus || "Not started"}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Status</p>
+            <p className="mt-0.5 font-black text-white">${workflow.filmingStatus || "Not started"}</p>
           </div>
-          <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Latest activity</p>
-            <p className="mt-1 font-black text-white">${timestampLabel(workflow.updatedAt)}</p>
+          <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Latest activity</p>
+            <p className="mt-0.5 font-black text-white">${timestampLabel(workflow.updatedAt)}</p>
           </div>
         </div>
       </div>
 
-      <div className="mt-4 rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Group members</p>
-        <p className="mt-1 text-sm font-semibold leading-6 text-slate-200">
+      <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
+        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Group members</p>
+        <p className="mt-0.5 text-xs font-semibold leading-5 text-slate-200">
           ${students.length ? students.map(titleFromEmail).join(", ") : "No students assigned yet"}
         </p>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-lens/20 bg-lens/10 p-3">
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-lens">Student rotation</p>
-        <p className="mt-2 min-h-10 text-sm font-semibold leading-5 text-slate-100">${rotatingInterest}</p>
+      <div className="mt-3 rounded-xl border border-lens/20 bg-lens/10 p-2.5">
+        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-lens">Student rotation</p>
+        <p className="mt-1 min-h-8 text-xs font-semibold leading-5 text-slate-100">${rotatingInterest}</p>
       </div>
     </article>
   `;
