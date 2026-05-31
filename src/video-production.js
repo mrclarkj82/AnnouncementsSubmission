@@ -107,6 +107,7 @@ const DEFAULT_SHOTS = [
 ];
 
 const PROJECT_STATUSES = ["active", "paused", "complete", "archived"];
+const PROJECT_UNITS = [1, 2, 3, 4];
 const FILMING_STATUSES = [
   "Not started",
   "Equipment check",
@@ -700,6 +701,34 @@ function projectBelongsToPeriod(project, periodId) {
   return normalizeProjectPeriodIds(project).includes(safeText(periodId));
 }
 
+function getProjectUnit(project) {
+  const rawUnit = project?.unit ?? project?.projectUnit ?? project?.unitNumber;
+  if (typeof rawUnit === "number" && PROJECT_UNITS.includes(rawUnit)) return rawUnit;
+
+  const unitText = safeText(rawUnit);
+  const directUnit = Number(unitText);
+  if (PROJECT_UNITS.includes(directUnit)) return directUnit;
+
+  const unitMatch = unitText.match(/\b([1-4])\b/) || unitText.match(/[1-4]/);
+  const matchedUnit = Number(unitMatch?.[1] || unitMatch?.[0]);
+  return PROJECT_UNITS.includes(matchedUnit) ? matchedUnit : 1;
+}
+
+function projectUnitLabel(project) {
+  return `Unit ${getProjectUnit(project)}`;
+}
+
+function projectBelongsToUnit(project, unit) {
+  const requestedUnit = Number(unit);
+  return PROJECT_UNITS.includes(requestedUnit) && getProjectUnit(project) === requestedUnit;
+}
+
+function getProjectsForPeriodAndUnit(projects, periodId, unit) {
+  return projects.filter((project) =>
+    projectBelongsToPeriod(project, periodId) && projectBelongsToUnit(project, unit),
+  );
+}
+
 function projectPeriodSummaries(project, periods = []) {
   const periodMap = new Map(periods.map((period) => [period.id, period]));
   const savedSummaryMap = new Map(
@@ -967,6 +996,7 @@ function cleanProject(project) {
     courseName: safeText(project?.courseName),
     groups,
     groupsByPeriod,
+    unit: getProjectUnit(project),
     checklistItems: normalizeChecklist(project?.checklistItems || []),
     scriptSections: normalizeScriptSections(project?.scriptSections || []),
     shotList: normalizeShots(project?.shotList || []),
@@ -1866,19 +1896,27 @@ function MonitorDashboard({
   onPreviewPeriod,
 }) {
   const [interestIndex, setInterestIndex] = useState(0);
+  const [selectedUnit, setSelectedUnit] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const activePeriods = getActivePeriods(periods);
   const selectedPeriod = activePeriods.find((period) => period.id === selectedPeriodId);
-  const activeProjects = projects
-    .filter((project) => project.status !== "archived")
-    .filter((project) => !selectedPeriodId || projectBelongsToPeriod(project, selectedPeriodId));
-  const selectedEnrollments = activeEnrollmentsForPeriod(enrollments, selectedPeriodId);
-  const monitorItems = selectedPeriodId
-    ? activeProjects.flatMap((project) =>
-        workflowContextsForProject(project, selectedPeriodId).map((context) => ({
-          ...context,
-          workflow: workflowForContext(project, selectedPeriodId, context.group, workflowMap),
-        })),
-      )
+  const selectedUnitNumber = selectedUnit ? Number(selectedUnit) : null;
+  const activeProjectsForPeriod = selectedPeriodId
+    ? projects
+        .filter((project) => project.status !== "archived")
+        .filter((project) => projectBelongsToPeriod(project, selectedPeriodId))
+    : [];
+  const unitProjects = selectedUnitNumber
+    ? getProjectsForPeriodAndUnit(activeProjectsForPeriod, selectedPeriodId, selectedUnitNumber)
+    : [];
+  const unitProjectIds = unitProjects.map((project) => project.id).join("|");
+  const selectedProject = unitProjects.find((project) => project.id === selectedProjectId);
+  const selectedEnrollments = selectedPeriodId ? activeEnrollmentsForPeriod(enrollments, selectedPeriodId) : [];
+  const monitorItems = selectedProject
+    ? workflowContextsForProject(selectedProject, selectedPeriodId).map((context) => ({
+        ...context,
+        workflow: workflowForContext(selectedProject, selectedPeriodId, context.group, workflowMap),
+      }))
     : [];
   const profileByEmail = useMemo(() => {
     const map = new Map();
@@ -1890,6 +1928,21 @@ function MonitorDashboard({
     const interval = window.setInterval(() => setInterestIndex((current) => current + 1), 4200);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setSelectedUnit("");
+    setSelectedProjectId("");
+  }, [selectedPeriodId]);
+
+  useEffect(() => {
+    setSelectedProjectId("");
+  }, [selectedUnit]);
+
+  useEffect(() => {
+    if (selectedProjectId && !unitProjects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId("");
+    }
+  }, [unitProjectIds, selectedProjectId]);
 
   return html`
     <section className="space-y-5">
@@ -1904,6 +1957,8 @@ function MonitorDashboard({
         <div className="flex flex-wrap gap-2">
           <${Badge} icon=${Activity}>${monitorItems.length} active group sessions</${Badge}>
           ${selectedPeriod ? html`<${Badge} icon=${LayoutGrid}>${selectedPeriod.periodName}</${Badge}>` : null}
+          ${selectedUnit ? html`<${Badge} icon=${BookOpen}>${projectUnitLabel({ unit: selectedUnitNumber })}</${Badge}>` : null}
+          ${selectedProject ? html`<${Badge} icon=${ClipboardCheck}>${selectedProject.title}</${Badge}>` : null}
           <${Badge} icon=${Clock}>Live Firestore updates</${Badge}>
         </div>
       </div>
@@ -1911,28 +1966,68 @@ function MonitorDashboard({
       ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
 
       <div className="vp-panel rounded-3xl p-4">
-        <label className="grid gap-2 text-sm font-bold text-slate-300 md:max-w-xl">
-          Select period to monitor
-          <${Select}
-            value=${selectedPeriodId}
-            onChange=${(event) => setSelectedPeriodId(event.currentTarget.value)}
-          >
-            <option value="">Select Period</option>
-            ${activePeriods.map(
-              (period) => html`
-                <option key=${period.id} value=${period.id}>
-                  ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
-                </option>
-              `,
-            )}
-          </${Select}>
-        </label>
+        <p className="text-sm font-black text-white">Select period to monitor</p>
+        <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_0.55fr_1.2fr]">
+          <label className="grid gap-2 text-sm font-bold text-slate-300">
+            Period
+            <${Select}
+              value=${selectedPeriodId}
+              onChange=${(event) => setSelectedPeriodId(event.currentTarget.value)}
+            >
+              <option value="">Select Period</option>
+              ${activePeriods.map(
+                (period) => html`
+                  <option key=${period.id} value=${period.id}>
+                    ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
+                  </option>
+                `,
+              )}
+            </${Select}>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-300">
+            Unit
+            <${Select}
+              value=${selectedUnit}
+              disabled=${!selectedPeriodId}
+              onChange=${(event) => setSelectedUnit(event.currentTarget.value)}
+            >
+              <option value="">Select Unit</option>
+              ${PROJECT_UNITS.map(
+                (unit) => html`<option key=${unit} value=${unit}>Unit ${unit}</option>`,
+              )}
+            </${Select}>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-300">
+            Assignment / Project
+            <${Select}
+              value=${selectedProjectId}
+              disabled=${!selectedPeriodId || !selectedUnit || unitProjects.length === 0}
+              onChange=${(event) => setSelectedProjectId(event.currentTarget.value)}
+            >
+              <option value="">
+                ${!selectedPeriodId || !selectedUnit
+                  ? "Select period and unit first"
+                  : unitProjects.length
+                    ? "Select assignment/project"
+                    : "No projects in this unit."}
+              </option>
+              ${unitProjects.map(
+                (project) => html`<option key=${project.id} value=${project.id}>${project.title}</option>`,
+              )}
+            </${Select}>
+          </label>
+        </div>
         ${selectedPeriod
           ? html`
               <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-slate-400">
                   Showing ${selectedEnrollments.length} enrolled student${selectedEnrollments.length === 1 ? "" : "s"}
-                  across ${monitorItems.length} group workflow${monitorItems.length === 1 ? "" : "s"} for
+                  ${selectedProject
+                    ? html`
+                        across ${monitorItems.length} group workflow${monitorItems.length === 1 ? "" : "s"} for
+                        <span className="font-black text-white">${selectedProject.title}</span>${" in "}
+                      `
+                    : " in "}
                   <span className="font-black text-white">${selectedPeriod.periodName}</span>.
                 </p>
                 <button
@@ -1952,28 +2047,32 @@ function MonitorDashboard({
       ${loading
         ? html`<${EmptyState} icon=${Activity} title="Loading live projects" />`
         : !selectedPeriodId
-          ? html`<${EmptyState} icon=${LayoutGrid} title="Select a period" body="The monitor now shows one class period at a time." />`
-          : activeProjects.length === 0
-            ? html`<${EmptyState} icon=${Monitor} title="No active filming sessions" body="Create a project for this period to see live progress here." />`
-            : monitorItems.length === 0
-              ? html`<${EmptyState} icon=${Users} title="No groups for this period" body="Create groups for the selected period before monitoring group progress." />`
-          : html`
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                ${monitorItems.map(
-                  (item) => html`
-                    <${ProjectMonitorCard}
-                      key=${item.workflowId}
-                      project=${item.project}
-                      period=${selectedPeriod}
-                      group=${item.group}
-                      workflow=${item.workflow}
-                      profileByEmail=${profileByEmail}
-                      interestIndex=${interestIndex}
-                    />
-                  `,
-                )}
-              </div>
-            `}
+          ? html`<${EmptyState} icon=${LayoutGrid} title="Select a period to begin monitoring." />`
+          : !selectedUnit
+            ? html`<${EmptyState} icon=${BookOpen} title="Select a unit." />`
+            : unitProjects.length === 0
+              ? html`<${EmptyState} icon=${Monitor} title="No projects found for this period and unit." />`
+              : !selectedProject
+                ? html`<${EmptyState} icon=${ClipboardCheck} title="Select an assignment/project to monitor." />`
+                : monitorItems.length === 0
+                  ? html`<${EmptyState} icon=${Users} title="No groups have been created for this project in this period." />`
+                  : html`
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                        ${monitorItems.map(
+                          (item) => html`
+                            <${ProjectMonitorCard}
+                              key=${item.workflowId}
+                              project=${item.project}
+                              period=${selectedPeriod}
+                              group=${item.group}
+                              workflow=${item.workflow}
+                              profileByEmail=${profileByEmail}
+                              interestIndex=${interestIndex}
+                            />
+                          `,
+                        )}
+                      </div>
+                    `}
     </section>
   `;
 }
@@ -1994,7 +2093,9 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
     <article className="vp-panel vp-fade rounded-2xl p-3" style=${progressTone(progress.percent)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">${period?.periodName || workflow.periodName}</p>
+          <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
+            ${period?.periodName || workflow.periodName} - ${projectUnitLabel(project)}
+          </p>
           <h2 className="mt-1 truncate text-lg font-black text-white">${project.title}</h2>
           <p className="text-sm font-black text-lens">${group.name}</p>
           <p className="text-xs text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
@@ -3074,6 +3175,7 @@ function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
     objective: "",
     dueDate: todayISO(),
     periodIds: [],
+    unit: "",
     assignedTeacherEmail: profile.email,
     teacherNotes: "",
   }));
@@ -3115,6 +3217,10 @@ function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
       setError("Select at least one class period before creating a project.");
       return;
     }
+    if (!PROJECT_UNITS.includes(Number(form.unit))) {
+      setError("Select a unit before creating a project.");
+      return;
+    }
     if (assignedStudentEmails.some((email) => !isAllowedDoralEmail(email))) {
       setError("Assigned students must use Doral email accounts.");
       return;
@@ -3131,6 +3237,7 @@ function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
         objective: safeText(form.objective),
         description: safeText(form.objective),
         dueDate: form.dueDate || todayISO(),
+        unit: getProjectUnit({ unit: form.unit }),
         periodId: primaryPeriod.id,
         periodIds,
         periodName: primaryPeriod.periodName,
@@ -3173,6 +3280,7 @@ function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
         objective: "",
         dueDate: todayISO(),
         periodIds: [],
+        unit: "",
         assignedTeacherEmail: profile.email,
         teacherNotes: "",
       });
@@ -3211,6 +3319,13 @@ function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
             selectedPeriodIds=${form.periodIds}
             onChange=${(periodIds) => update("periodIds", periodIds)}
           />
+        </label>
+        <label className="grid gap-1 text-sm font-bold text-slate-300">
+          Unit
+          <${Select} value=${form.unit} onChange=${(event) => update("unit", event.currentTarget.value)}>
+            <option value="">Select unit</option>
+            ${PROJECT_UNITS.map((unit) => html`<option key=${unit} value=${unit}>Unit ${unit}</option>`)}
+          </${Select}>
         </label>
         <label className="grid gap-1 text-sm font-bold text-slate-300">
           Project title
@@ -3719,7 +3834,9 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, period
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-lg font-black text-white">${project.title}</h3>
-          <p className="mt-1 text-sm text-slate-400">${projectPeriodLabel(project, periods)} - Due ${toDateLabel(project.dueDate)}</p>
+          <p className="mt-1 text-sm text-slate-400">
+            ${projectPeriodLabel(project, periods)} - ${projectUnitLabel(project)} - Due ${toDateLabel(project.dueDate)}
+          </p>
         </div>
         <${Badge} icon=${Gauge}>${progress.percent}%</${Badge}>
       </div>
@@ -3732,6 +3849,7 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, period
               </${Badge}>
             `
           : null}
+        <${Badge} icon=${BookOpen}>${projectUnitLabel(project)}</${Badge}>
         <${Badge} icon=${Users}>${studentCount} students</${Badge}>
         <${Badge} icon=${UserCog}>${project.assignedTeacherEmail}</${Badge}>
         <${Badge} icon=${Radio}>${project.status}</${Badge}>
