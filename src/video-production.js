@@ -2672,6 +2672,7 @@ function PeriodCreateForm({ profile, setToast }) {
 
 function PeriodCard({ profile, period, enrollments, setToast }) {
   const [busy, setBusy] = useState("");
+  const [rosterOpen, setRosterOpen] = useState(false);
   const activeEnrollments = activeEnrollmentsForPeriod(enrollments, period.id);
 
   const regenerateCode = async () => {
@@ -2797,34 +2798,52 @@ function PeriodCard({ profile, period, enrollments, setToast }) {
       </div>
 
       <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="font-black text-white">Enrolled students</h3>
-          <${Badge} icon=${Users}>${activeEnrollments.length}</${Badge}>
+        <button
+          type="button"
+          className="mb-2 flex w-full items-center justify-between gap-3 rounded-2xl bg-slate-950/35 px-3 py-2 text-left ring-1 ring-slate-700/70 transition hover:bg-slate-900/70"
+          aria-expanded=${rosterOpen}
+          onClick=${() => setRosterOpen((current) => !current)}
+        >
+          <span className="inline-flex items-center gap-2 font-black text-white">
+            <${Users} size=${17} />
+            Enrolled students
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <${Badge}>${activeEnrollments.length}</${Badge}>
+            <${ChevronDown}
+              size=${18}
+              className=${classNames("text-slate-400 transition-transform", rosterOpen ? "rotate-180" : "")}
+            />
+          </span>
+        </button>
+        <div className=${classNames("grid overflow-hidden transition-all duration-300", rosterOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+          <div className="min-h-0">
+            ${activeEnrollments.length === 0
+              ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No students have joined yet.</p>`
+              : html`
+                  <div className="grid gap-2">
+                    ${activeEnrollments.map(
+                      (enrollment) => html`
+                        <div key=${enrollment.id} className="flex flex-col gap-2 rounded-2xl bg-slate-950/42 p-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="truncate font-black text-white">${enrollment.studentName || titleFromEmail(enrollment.studentEmail)}</p>
+                            <p className="truncate text-sm text-slate-500">${enrollment.studentEmail}</p>
+                          </div>
+                          <${Button}
+                            icon=${X}
+                            variant="ghost"
+                            disabled=${busy === enrollment.id}
+                            onClick=${() => removeStudent(enrollment)}
+                          >
+                            Remove
+                          </${Button}>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                `}
+          </div>
         </div>
-        ${activeEnrollments.length === 0
-          ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No students have joined yet.</p>`
-          : html`
-              <div className="grid gap-2">
-                ${activeEnrollments.map(
-                  (enrollment) => html`
-                    <div key=${enrollment.id} className="flex flex-col gap-2 rounded-2xl bg-slate-950/42 p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <p className="truncate font-black text-white">${enrollment.studentName || titleFromEmail(enrollment.studentEmail)}</p>
-                        <p className="truncate text-sm text-slate-500">${enrollment.studentEmail}</p>
-                      </div>
-                      <${Button}
-                        icon=${X}
-                        variant="ghost"
-                        disabled=${busy === enrollment.id}
-                        onClick=${() => removeStudent(enrollment)}
-                      >
-                        Remove
-                      </${Button}>
-                    </div>
-                  `,
-                )}
-              </div>
-            `}
       </div>
 
       <div className="mt-4 flex justify-end">
