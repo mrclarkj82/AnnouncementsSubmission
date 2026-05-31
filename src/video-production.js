@@ -2684,6 +2684,7 @@ function ProjectManager({ profile, projects, loading, error, setToast, onPreview
 
 function MultiPeriodDropdown({ periods, selectedPeriodIds, onChange }) {
   const [open, setOpen] = useState(false);
+  const dropdownRef = useRef(null);
   const selectedPeriods = periods.filter((period) => selectedPeriodIds.includes(period.id));
   const label =
     selectedPeriods.length === 0
@@ -2691,6 +2692,23 @@ function MultiPeriodDropdown({ periods, selectedPeriodIds, onChange }) {
       : selectedPeriods.length === 1
         ? periodSummaryLabel(selectedPeriods[0])
         : `${selectedPeriods.length} periods selected`;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      if (!dropdownRef.current || dropdownRef.current.contains(event.target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
 
   const togglePeriod = (periodId) => {
     onChange(
@@ -2701,7 +2719,7 @@ function MultiPeriodDropdown({ periods, selectedPeriodIds, onChange }) {
   };
 
   return html`
-    <div className="relative">
+    <div ref=${dropdownRef} className="relative">
       <button
         type="button"
         className="vp-field flex min-h-12 w-full items-center justify-between gap-3 px-3 py-3 text-left font-black"
@@ -3149,31 +3167,41 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                 ${ungroupedStudents.length === 0
                   ? html`<p className="rounded-xl bg-slate-900 p-3 text-sm text-slate-500">No ungrouped students.</p>`
                   : html`
-                      <div className="grid gap-2">
+                      <div className="grid max-h-[min(42rem,calc(100vh-18rem))] gap-2 overflow-y-auto overscroll-contain pr-1 vp-scroll">
                         ${ungroupedStudents.map(
                           (student) => html`
                             <div
                               key=${student.email}
                               draggable=${true}
                               onDragStart=${(event) => startDrag(event, student)}
-                              className="grid min-w-0 cursor-grab gap-3 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+                              className="grid min-w-0 cursor-grab gap-3 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-center"
                             >
                               <div className="min-w-0">
                                 <p className="truncate font-black text-white">${student.name}</p>
                                 <p className="truncate text-xs text-slate-500">${student.email}</p>
                               </div>
-                              ${openGroup
-                                ? html`
+                              <div className="grid gap-2 sm:grid-cols-2 2xl:flex 2xl:justify-end">
+                                ${openGroup
+                                  ? html`
                                     <${Button}
                                       type="button"
                                       variant="ghost"
-                                      className="w-full md:w-auto md:min-w-[9.5rem]"
+                                      className="w-full 2xl:w-auto 2xl:min-w-[9.5rem]"
                                       onClick=${() => moveStudentToGroup(student, openGroup.id)}
                                     >
-                                      Add to open group
+                                      Add to selected group
                                     </${Button}>
                                   `
-                                : null}
+                                  : null}
+                                <${Button}
+                                  type="button"
+                                  variant="secondary"
+                                  className="w-full 2xl:w-auto 2xl:min-w-[11rem]"
+                                  onClick=${() => createGroup(student)}
+                                >
+                                  Add to new empty group
+                                </${Button}>
+                              </div>
                             </div>
                           `,
                         )}
@@ -3181,127 +3209,129 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
                     `}
               </section>
 
-              <section className="min-w-0 space-y-3">
-                ${currentGroups.length === 0
-                  ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No groups yet. Use the drop zone below to create one.</p>`
-                  : null}
-                ${currentGroups.map((group) => {
-                  const isOpen = group.id === openGroupId;
-                  const groupStudents = group.assignedStudentEmails.map((email) => ({
-                    email,
-                    name:
-                      selectedStudents.find((student) => student.email === normalizeEmail(email))?.name ||
-                      titleFromEmail(email),
-                  }));
-                  return html`
-                    <article
-                      key=${group.id}
-                      className=${classNames(
-                        "rounded-2xl border p-3 transition",
-                        isOpen
-                          ? "border-lens/45 bg-lens/10"
-                          : "border-slate-700/70 bg-slate-950/42 hover:border-lens/30",
-                      )}
-                      onDragOver=${(event) => {
-                        event.preventDefault();
-                        setOpenGroupId(group.id);
-                      }}
-                      onDrop=${(event) => {
-                        event.preventDefault();
-                        const student = studentFromDrag(event);
-                        if (student) moveStudentToGroup(student, group.id);
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-between gap-3 text-left"
-                        onClick=${() => setOpenGroupId(group.id)}
+              <section className="min-w-0">
+                <div className="grid max-h-[min(42rem,calc(100vh-18rem))] gap-3 overflow-y-auto overscroll-contain pr-1 vp-scroll">
+                  ${currentGroups.length === 0
+                    ? html`<p className="rounded-2xl bg-slate-950/42 p-3 text-sm text-slate-500">No groups yet. Use the drop zone below to create one.</p>`
+                    : null}
+                  ${currentGroups.map((group) => {
+                    const isOpen = group.id === openGroupId;
+                    const groupStudents = group.assignedStudentEmails.map((email) => ({
+                      email,
+                      name:
+                        selectedStudents.find((student) => student.email === normalizeEmail(email))?.name ||
+                        titleFromEmail(email),
+                    }));
+                    return html`
+                      <article
+                        key=${group.id}
+                        className=${classNames(
+                          "rounded-2xl border p-3 transition",
+                          isOpen
+                            ? "border-lens/45 bg-lens/10"
+                            : "border-slate-700/70 bg-slate-950/42 hover:border-lens/30",
+                        )}
+                        onDragOver=${(event) => {
+                          event.preventDefault();
+                          setOpenGroupId(group.id);
+                        }}
+                        onDrop=${(event) => {
+                          event.preventDefault();
+                          const student = studentFromDrag(event);
+                          if (student) moveStudentToGroup(student, group.id);
+                        }}
                       >
-                        <span className="min-w-0">
-                          <span className="block font-black text-white">${group.name}</span>
-                          <span className="text-xs font-semibold text-slate-500">
-                            ${groupStudents.length} student${groupStudents.length === 1 ? "" : "s"}
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 text-left"
+                          onClick=${() => setOpenGroupId(group.id)}
+                        >
+                          <span className="min-w-0">
+                            <span className="block font-black text-white">${group.name}</span>
+                            <span className="text-xs font-semibold text-slate-500">
+                              ${groupStudents.length} student${groupStudents.length === 1 ? "" : "s"}
+                            </span>
                           </span>
-                        </span>
-                        <${ChevronDown}
-                          size=${18}
-                          className=${classNames("transition", isOpen ? "rotate-180 text-lens" : "text-slate-500")}
-                        />
-                      </button>
+                          <${ChevronDown}
+                            size=${18}
+                            className=${classNames("transition", isOpen ? "rotate-180 text-lens" : "text-slate-500")}
+                          />
+                        </button>
 
-                      ${isOpen
-                        ? html`
-                            <div className="mt-3 space-y-3">
-                              <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-end">
-                                <label className="grid gap-1 text-sm font-bold text-slate-300">
-                                  Group name
-                                  <${TextInput}
-                                    value=${group.name}
-                                    onInput=${(event) => updateGroupName(group.id, event.currentTarget.value)}
-                                    onBlur=${saveGroupNames}
-                                  />
-                                </label>
-                                <${Button}
-                                  icon=${Trash2}
-                                  type="button"
-                                  variant="ghost"
-                                  className="w-full 2xl:w-auto"
-                                  onClick=${() => deleteGroup(group.id)}
-                                >
-                                  Delete group
-                                </${Button}>
-                              </div>
-                              <div className="min-h-24 rounded-2xl border border-dashed border-lens/35 bg-slate-950/35 p-3">
-                                ${groupStudents.length === 0
-                                  ? html`<p className="text-sm text-slate-500">Drop students here or use the fallback button.</p>`
-                                  : html`
-                                      <div className="grid gap-2">
-                                        ${groupStudents.map(
-                                          (student) => html`
-                                            <div
-                                              key=${student.email}
-                                              draggable=${true}
-                                              onDragStart=${(event) => startDrag(event, student)}
-                                              className="grid min-w-0 cursor-grab gap-3 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
-                                            >
-                                              <div className="min-w-0">
-                                                <p className="truncate font-black text-white">${student.name}</p>
-                                                <p className="truncate text-xs text-slate-500">${student.email}</p>
-                                              </div>
-                                              <${Button}
-                                                type="button"
-                                                variant="ghost"
-                                                className="w-full md:w-auto"
-                                                onClick=${() => removeStudentFromGroups(student.email)}
+                        ${isOpen
+                          ? html`
+                              <div className="mt-3 space-y-3">
+                                <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-end">
+                                  <label className="grid gap-1 text-sm font-bold text-slate-300">
+                                    Group name
+                                    <${TextInput}
+                                      value=${group.name}
+                                      onInput=${(event) => updateGroupName(group.id, event.currentTarget.value)}
+                                      onBlur=${saveGroupNames}
+                                    />
+                                  </label>
+                                  <${Button}
+                                    icon=${Trash2}
+                                    type="button"
+                                    variant="ghost"
+                                    className="w-full 2xl:w-auto"
+                                    onClick=${() => deleteGroup(group.id)}
+                                  >
+                                    Delete group
+                                  </${Button}>
+                                </div>
+                                <div className="min-h-24 rounded-2xl border border-dashed border-lens/35 bg-slate-950/35 p-3">
+                                  ${groupStudents.length === 0
+                                    ? html`<p className="text-sm text-slate-500">Drop students here or use the fallback button.</p>`
+                                    : html`
+                                        <div className="grid gap-2">
+                                          ${groupStudents.map(
+                                            (student) => html`
+                                              <div
+                                                key=${student.email}
+                                                draggable=${true}
+                                                onDragStart=${(event) => startDrag(event, student)}
+                                                className="grid min-w-0 cursor-grab gap-3 rounded-xl bg-slate-900 p-3 ring-1 ring-slate-700/70 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
                                               >
-                                                Remove
-                                              </${Button}>
-                                            </div>
-                                          `,
-                                        )}
-                                      </div>
-                                    `}
+                                                <div className="min-w-0">
+                                                  <p className="truncate font-black text-white">${student.name}</p>
+                                                  <p className="truncate text-xs text-slate-500">${student.email}</p>
+                                                </div>
+                                                <${Button}
+                                                  type="button"
+                                                  variant="ghost"
+                                                  className="w-full md:w-auto"
+                                                  onClick=${() => removeStudentFromGroups(student.email)}
+                                                >
+                                                  Remove
+                                                </${Button}>
+                                              </div>
+                                            `,
+                                          )}
+                                        </div>
+                                      `}
+                                </div>
                               </div>
-                            </div>
-                          `
-                        : null}
-                    </article>
-                  `;
-                })}
+                            `
+                          : null}
+                      </article>
+                    `;
+                  })}
 
-                <button
-                  type="button"
-                  className="flex min-h-24 w-full items-center justify-center rounded-2xl border border-dashed border-slate-600/80 bg-transparent p-4 text-sm font-black text-slate-400 transition hover:border-lens/60 hover:text-lens"
-                  onClick=${() => createGroup()}
-                  onDragOver=${(event) => event.preventDefault()}
-                  onDrop=${(event) => {
-                    event.preventDefault();
-                    const student = studentFromDrag(event);
-                    if (student) createGroup(student);
-                  }}
-                >
-                  Add new group?
-                </button>
+                  <button
+                    type="button"
+                    className="flex min-h-24 w-full items-center justify-center rounded-2xl border border-dashed border-slate-600/80 bg-transparent p-4 text-sm font-black text-slate-400 transition hover:border-lens/60 hover:text-lens"
+                    onClick=${() => createGroup()}
+                    onDragOver=${(event) => event.preventDefault()}
+                    onDrop=${(event) => {
+                      event.preventDefault();
+                      const student = studentFromDrag(event);
+                      if (student) createGroup(student);
+                    }}
+                  >
+                    Add new group?
+                  </button>
+                </div>
               </section>
             </div>
           `}
