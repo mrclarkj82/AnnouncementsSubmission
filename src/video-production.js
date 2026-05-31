@@ -551,6 +551,21 @@ function projectProgress(project) {
   };
 }
 
+function emptyChecklistProgress() {
+  return { completed: 0, total: 0, percent: 0 };
+}
+
+function checklistProgress(items) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  if (!normalizedItems.length) return emptyChecklistProgress();
+  const completed = normalizedItems.filter((item) => item.completed).length;
+  return {
+    completed,
+    total: normalizedItems.length,
+    percent: Math.round((completed / normalizedItems.length) * 100),
+  };
+}
+
 function progressTone(percent) {
   const hue = Math.round((Math.max(0, Math.min(100, percent)) / 100) * 126);
   return {
@@ -579,6 +594,15 @@ function normalizeChecklist(items) {
             completedAt: item.completedAt || "",
           },
   );
+}
+
+function checklistTemplateForProject(project) {
+  return normalizeChecklist(project?.checklistItems || DEFAULT_PRODUCTION_CHECKLIST).map((item) => ({
+    ...item,
+    completed: false,
+    completedBy: "",
+    completedAt: "",
+  }));
 }
 
 function normalizeScriptSections(sections) {
@@ -616,14 +640,30 @@ function normalizeShots(shots) {
   );
 }
 
+function stableGroupId(group, index) {
+  const existingId = safeText(group?.id);
+  if (existingId) return existingId;
+  const slug = slugFromName(group?.name || `Group ${index + 1}`).replace(/\./g, "-");
+  return `legacy-group-${index + 1}-${slug || "untitled"}`;
+}
+
 function normalizeGroupItems(groups) {
+  const usedGroupIds = new Set();
   return Array.isArray(groups)
     ? groups.map((group, index) => {
         const assignedStudentEmails = Array.isArray(group.assignedStudentEmails)
           ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
           : splitEmails(group.assignedStudents || "");
+        const baseId = stableGroupId(group, index);
+        let id = baseId;
+        let duplicateIndex = 2;
+        while (usedGroupIds.has(id)) {
+          id = `${baseId}-${duplicateIndex}`;
+          duplicateIndex += 1;
+        }
+        usedGroupIds.add(id);
         return {
-          id: group.id || makeId("group"),
+          id,
           name: safeText(group.name) || `Group ${index + 1}`,
           assignedStudentEmails,
           assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
@@ -769,6 +809,119 @@ function projectGroupDrafts(project) {
     name: group.name,
     assignedStudents: group.assignedStudentEmails.join(", "),
   }));
+}
+
+function projectGroupsForPeriod(project, periodId) {
+  const groupsByPeriod = normalizeGroupsByPeriod(project);
+  return normalizeGroupItems(groupsByPeriod[safeText(periodId)] || []);
+}
+
+function projectGroupWorkflowId(projectId, periodId, groupId) {
+  return [
+    safeFirestoreId(projectId),
+    safeFirestoreId(periodId),
+    safeFirestoreId(groupId),
+  ].join("__");
+}
+
+function defaultGroupWorkflow(project, periodId, group) {
+  const checklistItems = checklistTemplateForProject(project);
+  const assignedStudentEmails = Array.isArray(group?.assignedStudentEmails)
+    ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+    : [];
+  return {
+    id: projectGroupWorkflowId(project?.id, periodId, group?.id),
+    projectId: project?.id || "",
+    periodId: safeText(periodId),
+    groupId: safeText(group?.id),
+    projectTitle: safeText(project?.title),
+    periodName: safeText(project?.periodName),
+    groupName: safeText(group?.name) || "Group",
+    assignedStudentEmails,
+    assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
+    filmingStatus: "Not started",
+    currentTask: "Equipment pickup",
+    checklistItems,
+    checklistCompletedCount: 0,
+    checklistTotal: checklistItems.length,
+    updatedAt: "",
+    updatedBy: "",
+    updatedByEmail: "",
+  };
+}
+
+function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
+  const base = defaultGroupWorkflow(project, periodId, group);
+  const rawChecklistItems = Array.isArray(workflow?.checklistItems) ? workflow.checklistItems : base.checklistItems;
+  const checklistItems = normalizeChecklist(rawChecklistItems);
+  const progress = checklistProgress(checklistItems);
+  return {
+    ...base,
+    ...(workflow || {}),
+    id: workflow?.id || base.id,
+    projectId: project?.id || workflow?.projectId || base.projectId,
+    periodId: safeText(periodId || workflow?.periodId || base.periodId),
+    groupId: safeText(group?.id || workflow?.groupId || base.groupId),
+    projectTitle: safeText(project?.title || workflow?.projectTitle),
+    groupName: safeText(group?.name || workflow?.groupName) || base.groupName,
+    assignedStudentEmails: base.assignedStudentEmails,
+    assignedStudentNames: base.assignedStudentNames,
+    filmingStatus: safeText(workflow?.filmingStatus) || base.filmingStatus,
+    currentTask: safeText(workflow?.currentTask) || base.currentTask,
+    checklistItems,
+    checklistCompletedCount: progress.completed,
+    checklistTotal: progress.total,
+    updatedAt: workflow?.updatedAt || "",
+    updatedBy: safeText(workflow?.updatedBy),
+    updatedByEmail: normalizeEmail(workflow?.updatedByEmail),
+  };
+}
+
+function workflowForContext(project, periodId, group, workflowMap = {}) {
+  if (!project?.id || !periodId || !group?.id) return defaultGroupWorkflow(project, periodId, group);
+  const workflowId = projectGroupWorkflowId(project.id, periodId, group.id);
+  return normalizeGroupWorkflow(project, periodId, group, workflowMap[workflowId]);
+}
+
+function workflowContextsForProject(project, periodId = "") {
+  const periodIds = periodId ? [safeText(periodId)] : normalizeProjectPeriodIds(project);
+  return periodIds.flatMap((currentPeriodId) =>
+    projectGroupsForPeriod(project, currentPeriodId).map((group) => ({
+      project,
+      periodId: currentPeriodId,
+      group,
+      workflowId: projectGroupWorkflowId(project.id, currentPeriodId, group.id),
+    })),
+  );
+}
+
+function groupForStudent(project, periodId, studentEmail) {
+  const email = normalizeEmail(studentEmail);
+  return projectGroupsForPeriod(project, periodId).find((group) =>
+    group.assignedStudentEmails.map(normalizeEmail).includes(email),
+  );
+}
+
+function resolveWorkflowContext({ project, profile, enrollments = [], periodId = "", groupId = "", previewMode = false }) {
+  const projectPeriodIds = normalizeProjectPeriodIds(project);
+  const profileEmail = normalizeEmail(profile?.email);
+  const enrolledPeriodId = enrollments
+    .filter((enrollment) => enrollment.active !== false)
+    .map((enrollment) => safeText(enrollment.periodId))
+    .find((candidatePeriodId) => projectPeriodIds.includes(candidatePeriodId));
+  const selectedPeriodId = safeText(periodId) || enrolledPeriodId || projectPeriodIds[0] || project?.periodId || "";
+  const groups = projectGroupsForPeriod(project, selectedPeriodId);
+  const selectedGroup =
+    groups.find((group) => group.id === groupId) ||
+    groupForStudent(project, selectedPeriodId, profileEmail) ||
+    (previewMode ? groups[0] : null);
+  return {
+    periodId: selectedPeriodId,
+    groups,
+    group: selectedGroup || null,
+    groupId: selectedGroup?.id || "",
+    isAssigned: Boolean(selectedGroup),
+  };
 }
 
 function serializeGroupDrafts(groupDrafts) {
@@ -1218,6 +1371,93 @@ function useVideoProjects(profile, enrollments = [], periods = []) {
   return { projects, loading, error };
 }
 
+function useProjectGroupWorkflows(profile, projects = []) {
+  const [workflows, setWorkflows] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const projectSignature = JSON.stringify(
+    projects.map((project) => ({
+      id: project.id,
+      periodId: project.periodId,
+      periodIds: project.periodIds,
+      groups: project.groups,
+      groupsByPeriod: project.groupsByPeriod,
+    })),
+  );
+
+  useEffect(() => {
+    if (!hasVideoAccess(profile)) {
+      setWorkflows({});
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    setLoading(true);
+    const workflowsRef = collection(db, "projectGroupWorkflows");
+
+    if (isVideoAdmin(profile) || isVideoTeacher(profile)) {
+      const unsubscribe = onSnapshot(
+        workflowsRef,
+        (snapshot) => {
+          const nextWorkflows = {};
+          snapshot.docs.forEach((item) => {
+            nextWorkflows[item.id] = { id: item.id, ...item.data() };
+          });
+          setWorkflows(nextWorkflows);
+          setError("");
+          setLoading(false);
+        },
+        (snapshotError) => {
+          setError(snapshotError.message);
+          setLoading(false);
+        },
+      );
+
+      return unsubscribe;
+    }
+
+    const studentEmail = normalizeEmail(profile?.email);
+    const contexts = projects.flatMap((project) =>
+      workflowContextsForProject(project).filter((context) =>
+        context.group.assignedStudentEmails.map(normalizeEmail).includes(studentEmail),
+      ),
+    );
+
+    if (!contexts.length) {
+      setWorkflows({});
+      setError("");
+      setLoading(false);
+      return undefined;
+    }
+
+    const workflowBuckets = new Map();
+    const updateStudentWorkflows = () => {
+      setWorkflows(Object.fromEntries(workflowBuckets.entries()));
+      setError("");
+      setLoading(false);
+    };
+    const unsubscribes = contexts.map((context) =>
+      onSnapshot(
+        doc(db, "projectGroupWorkflows", context.workflowId),
+        (snapshot) => {
+          if (snapshot.exists()) workflowBuckets.set(snapshot.id, { id: snapshot.id, ...snapshot.data() });
+          else workflowBuckets.delete(context.workflowId);
+          updateStudentWorkflows();
+        },
+        (snapshotError) => {
+          setError(snapshotError.message);
+          setLoading(false);
+        },
+      ),
+    );
+
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [profile?.email, profile?.role, projectSignature]);
+
+  return { workflows, loading, error };
+}
+
 function useVideoUsers(enabled) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1299,6 +1539,61 @@ async function saveProjectPatch(project, profile, patch, action) {
     lastActivityBy: profile.email,
   });
   if (action) await addActivity(project, profile, action);
+}
+
+async function saveGroupWorkflow(project, periodId, group, currentWorkflow, profile, patch, action) {
+  const baseWorkflow = normalizeGroupWorkflow(project, periodId, group, currentWorkflow);
+  const checklistItems = patch.checklistItems
+    ? normalizeChecklist(patch.checklistItems)
+    : baseWorkflow.checklistItems;
+  const progress = checklistProgress(checklistItems);
+  const periodSummary = projectPeriodSummaries(project).find((summary) => summary.id === periodId);
+  const workflowId = projectGroupWorkflowId(project.id, periodId, group.id);
+  const payload = {
+    workflowId,
+    projectId: project.id,
+    periodId,
+    groupId: group.id,
+    projectTitle: project.title,
+    periodName: periodSummary?.periodName || project.periodName || "",
+    groupName: group.name,
+    assignedStudentEmails: group.assignedStudentEmails.map(normalizeEmail).filter(Boolean),
+    assignedStudentNames: group.assignedStudentEmails.map(titleFromEmail),
+    filmingStatus: safeText(patch.filmingStatus || baseWorkflow.filmingStatus) || "Not started",
+    currentTask: safeText(patch.currentTask || baseWorkflow.currentTask) || "Equipment pickup",
+    checklistItems,
+    checklistCompletedCount: progress.completed,
+    checklistTotal: progress.total,
+    updatedAt: serverTimestamp(),
+    updatedBy: profile.uid || "",
+    updatedByEmail: normalizeEmail(profile.email),
+  };
+
+  await setDoc(doc(db, "projectGroupWorkflows", workflowId), payload, { merge: true });
+  await updateDoc(doc(db, "videoProjects", project.id), {
+    updatedAt: serverTimestamp(),
+    lastActivityAt: serverTimestamp(),
+    lastActivityBy: profile.email,
+  });
+  if (action) await addActivity(project, profile, action);
+}
+
+async function syncExistingGroupWorkflowRoster(project, periodId, group, profile, assignedStudentEmails = null) {
+  const emails = Array.isArray(assignedStudentEmails)
+    ? assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+    : group.assignedStudentEmails.map(normalizeEmail).filter(Boolean);
+  try {
+    await updateDoc(doc(db, "projectGroupWorkflows", projectGroupWorkflowId(project.id, periodId, group.id)), {
+      groupName: group.name,
+      assignedStudentEmails: emails,
+      assignedStudentNames: emails.map(titleFromEmail),
+      updatedAt: serverTimestamp(),
+      updatedBy: profile.uid || "",
+      updatedByEmail: normalizeEmail(profile.email),
+    });
+  } catch {
+    // Workflow docs are created on first group activity. Missing docs do not need roster syncing yet.
+  }
 }
 
 function Button({ icon: Icon, variant = "primary", className = "", children, ...props }) {
@@ -1565,6 +1860,7 @@ function MonitorDashboard({
   studentProfiles,
   periods,
   enrollments,
+  workflowMap,
   selectedPeriodId,
   setSelectedPeriodId,
   onPreviewPeriod,
@@ -1576,6 +1872,14 @@ function MonitorDashboard({
     .filter((project) => project.status !== "archived")
     .filter((project) => !selectedPeriodId || projectBelongsToPeriod(project, selectedPeriodId));
   const selectedEnrollments = activeEnrollmentsForPeriod(enrollments, selectedPeriodId);
+  const monitorItems = selectedPeriodId
+    ? activeProjects.flatMap((project) =>
+        workflowContextsForProject(project, selectedPeriodId).map((context) => ({
+          ...context,
+          workflow: workflowForContext(project, selectedPeriodId, context.group, workflowMap),
+        })),
+      )
+    : [];
   const profileByEmail = useMemo(() => {
     const map = new Map();
     studentProfiles.forEach((profile) => map.set(normalizeEmail(profile.email || profile.id), profile));
@@ -1598,7 +1902,7 @@ function MonitorDashboard({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <${Badge} icon=${Activity}>${activeProjects.length} active sessions</${Badge}>
+          <${Badge} icon=${Activity}>${monitorItems.length} active group sessions</${Badge}>
           ${selectedPeriod ? html`<${Badge} icon=${LayoutGrid}>${selectedPeriod.periodName}</${Badge}>` : null}
           <${Badge} icon=${Clock}>Live Firestore updates</${Badge}>
         </div>
@@ -1628,7 +1932,7 @@ function MonitorDashboard({
               <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-slate-400">
                   Showing ${selectedEnrollments.length} enrolled student${selectedEnrollments.length === 1 ? "" : "s"}
-                  and ${activeProjects.length} active project${activeProjects.length === 1 ? "" : "s"} for
+                  across ${monitorItems.length} group workflow${monitorItems.length === 1 ? "" : "s"} for
                   <span className="font-black text-white">${selectedPeriod.periodName}</span>.
                 </p>
                 <button
@@ -1651,14 +1955,18 @@ function MonitorDashboard({
           ? html`<${EmptyState} icon=${LayoutGrid} title="Select a period" body="The monitor now shows one class period at a time." />`
           : activeProjects.length === 0
             ? html`<${EmptyState} icon=${Monitor} title="No active filming sessions" body="Create a project for this period to see live progress here." />`
+            : monitorItems.length === 0
+              ? html`<${EmptyState} icon=${Users} title="No groups for this period" body="Create groups for the selected period before monitoring group progress." />`
           : html`
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                ${activeProjects.map(
-                  (project) => html`
+                ${monitorItems.map(
+                  (item) => html`
                     <${ProjectMonitorCard}
-                      key=${project.id}
-                      project=${project}
-                      enrollments=${selectedEnrollments}
+                      key=${item.workflowId}
+                      project=${item.project}
+                      period=${selectedPeriod}
+                      group=${item.group}
+                      workflow=${item.workflow}
                       profileByEmail=${profileByEmail}
                       interestIndex=${interestIndex}
                     />
@@ -1670,14 +1978,9 @@ function MonitorDashboard({
   `;
 }
 
-function ProjectMonitorCard({ project, enrollments, profileByEmail, interestIndex }) {
-  const progress = projectProgress(project);
-  const periodStudentEmails = enrollments.map((enrollment) => normalizeEmail(enrollment.studentEmail)).filter(Boolean);
-  const students = periodStudentEmails.length
-    ? periodStudentEmails
-    : project.assignedStudentEmails?.length
-      ? project.assignedStudentEmails
-      : [];
+function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, interestIndex }) {
+  const progress = checklistProgress(workflow.checklistItems);
+  const students = group.assignedStudentEmails || [];
   const interestPool = students.flatMap((email) =>
     flattenStudentInterests(profileByEmail.get(normalizeEmail(email))).map(
       (interest) => `${titleFromEmail(email)} - ${interest}`,
@@ -1691,8 +1994,9 @@ function ProjectMonitorCard({ project, enrollments, profileByEmail, interestInde
     <article className="vp-panel vp-fade rounded-3xl p-4" style=${progressTone(progress.percent)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">${projectGroupLabel(project)}</p>
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">${period?.periodName || workflow.periodName}</p>
           <h2 className="mt-1 truncate text-xl font-black text-white">${project.title}</h2>
+          <p className="mt-1 text-sm font-black text-lens">${group.name}</p>
           <p className="mt-1 text-sm text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
         </div>
         <div className="rounded-2xl bg-slate-950/50 px-3 py-2 text-right ring-1 ring-white/10">
@@ -1708,18 +2012,25 @@ function ProjectMonitorCard({ project, enrollments, profileByEmail, interestInde
       <div className="mt-4 grid gap-3 text-sm text-slate-300">
         <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Current task</p>
-          <p className="mt-1 font-black text-white">${project.currentTask || "Not set"}</p>
+          <p className="mt-1 font-black text-white">${workflow.currentTask || "Equipment pickup"}</p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Status</p>
-            <p className="mt-1 font-black text-white">${project.filmingStatus || "Not started"}</p>
+            <p className="mt-1 font-black text-white">${workflow.filmingStatus || "Not started"}</p>
           </div>
           <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Latest activity</p>
-            <p className="mt-1 font-black text-white">${timestampLabel(project.lastActivityAt || project.updatedAt)}</p>
+            <p className="mt-1 font-black text-white">${timestampLabel(workflow.updatedAt)}</p>
           </div>
         </div>
+      </div>
+
+      <div className="mt-4 rounded-2xl bg-slate-950/42 p-3 ring-1 ring-white/10">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Group members</p>
+        <p className="mt-1 text-sm font-semibold leading-6 text-slate-200">
+          ${students.length ? students.map(titleFromEmail).join(", ") : "No students assigned yet"}
+        </p>
       </div>
 
       <div className="mt-4 rounded-2xl border border-lens/20 bg-lens/10 p-3">
@@ -2998,6 +3309,30 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
         },
         action,
       );
+      const nextContexts = periodIds.flatMap((periodId) =>
+        normalizeGroupItems(normalizedGroupsByPeriod[periodId] || []).map((group) => ({
+          periodId,
+          group,
+          assignedStudentEmails: group.assignedStudentEmails,
+        })),
+      );
+      const nextWorkflowIds = new Set(
+        nextContexts.map((context) => projectGroupWorkflowId(project.id, context.periodId, context.group.id)),
+      );
+      const removedContexts = workflowContextsForProject(project)
+        .filter((context) => !nextWorkflowIds.has(context.workflowId))
+        .map((context) => ({ ...context, assignedStudentEmails: [] }));
+      await Promise.all(
+        [...nextContexts, ...removedContexts].map((context) =>
+          syncExistingGroupWorkflowRoster(
+            project,
+            context.periodId,
+            context.group,
+            profile,
+            context.assignedStudentEmails,
+          ),
+        ),
+      );
       setToast("Project groups saved");
     } catch (saveError) {
       setError(saveError.message);
@@ -3550,6 +3885,9 @@ function StudentFilmingHome({
   enrollmentsLoading,
   enrollmentsError,
   periodsLoading,
+  workflowMap,
+  workflowsLoading,
+  workflowsError,
   setToast,
   setKioskActive,
 }) {
@@ -3579,6 +3917,8 @@ function StudentFilmingHome({
   }
   if (loading) return html`<${EmptyState} icon=${Camera} title="Loading assigned projects" />`;
   if (error) return html`<${EmptyState} icon=${AlertTriangle} title="Project access error" body=${error} />`;
+  if (workflowsLoading) return html`<${EmptyState} icon=${ListChecks} title="Loading group workflow" />`;
+  if (workflowsError) return html`<${EmptyState} icon=${AlertTriangle} title="Workflow error" body=${workflowsError} />`;
   if (!activeProjects.length) {
     return html`
       <${EmptyState}
@@ -3616,6 +3956,8 @@ function StudentFilmingHome({
             <${FilmingWorkspace}
               profile=${profile}
               project=${selectedProject}
+              enrollments=${activeEnrollments}
+              workflowMap=${workflowMap}
               setToast=${setToast}
               setKioskActive=${setKioskActive}
             />
@@ -3625,7 +3967,32 @@ function StudentFilmingHome({
   `;
 }
 
-function AdminStudentPreview({ profile, project, setToast, setKioskActive, onClose }) {
+function AdminStudentPreview({ profile, project, workflowMap, setToast, setKioskActive, onClose }) {
+  const periodSummaries = projectPeriodSummaries(project);
+  const [selectedPeriodId, setSelectedPeriodId] = useState(periodSummaries[0]?.id || "");
+  const currentGroups = projectGroupsForPeriod(project, selectedPeriodId);
+  const [selectedGroupId, setSelectedGroupId] = useState(currentGroups[0]?.id || "");
+
+  useEffect(() => {
+    if (!periodSummaries.length) {
+      setSelectedPeriodId("");
+      return;
+    }
+    if (!periodSummaries.some((period) => period.id === selectedPeriodId)) {
+      setSelectedPeriodId(periodSummaries[0].id);
+    }
+  }, [periodSummaries.map((period) => period.id).join("|"), selectedPeriodId]);
+
+  useEffect(() => {
+    if (!currentGroups.length) {
+      setSelectedGroupId("");
+      return;
+    }
+    if (!currentGroups.some((group) => group.id === selectedGroupId)) {
+      setSelectedGroupId(currentGroups[0].id);
+    }
+  }, [currentGroups.map((group) => group.id).join("|"), selectedGroupId]);
+
   return html`
     <section className="space-y-4">
       <div className="vp-panel rounded-3xl border border-warning/35 p-4 sm:p-5">
@@ -3640,9 +4007,28 @@ function AdminStudentPreview({ profile, project, setToast, setKioskActive, onClo
           <${Button} icon=${X} variant="ghost" onClick=${onClose}>Exit preview</${Button}>
         </div>
       </div>
+      <div className="vp-panel grid gap-3 rounded-3xl p-4 md:grid-cols-2">
+        <label className="grid gap-2 text-sm font-bold text-slate-300">
+          Preview period
+          <${Select} value=${selectedPeriodId} onChange=${(event) => setSelectedPeriodId(event.currentTarget.value)}>
+            ${periodSummaries.map(
+              (period) => html`<option key=${period.id} value=${period.id}>${periodSummaryLabel(period)}</option>`,
+            )}
+          </${Select}>
+        </label>
+        <label className="grid gap-2 text-sm font-bold text-slate-300">
+          Preview group
+          <${Select} value=${selectedGroupId} onChange=${(event) => setSelectedGroupId(event.currentTarget.value)}>
+            ${currentGroups.map((group) => html`<option key=${group.id} value=${group.id}>${group.name}</option>`)}
+          </${Select}>
+        </label>
+      </div>
       <${FilmingWorkspace}
         profile=${profile}
         project=${project}
+        contextPeriodId=${selectedPeriodId}
+        contextGroupId=${selectedGroupId}
+        workflowMap=${workflowMap}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         previewMode=${true}
@@ -3651,7 +4037,7 @@ function AdminStudentPreview({ profile, project, setToast, setKioskActive, onClo
   `;
 }
 
-function StaffStudentPeriodPreview({ profile, period, projects, setToast, setKioskActive, onClose }) {
+function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, setToast, setKioskActive, onClose }) {
   const activeProjects = projects.filter((project) => project.status !== "archived");
   const [selectedProjectId, setSelectedProjectId] = useState(activeProjects[0]?.id || "");
 
@@ -3666,6 +4052,18 @@ function StaffStudentPeriodPreview({ profile, period, projects, setToast, setKio
   }, [activeProjects.map((project) => project.id).join("|"), selectedProjectId]);
 
   const selectedProject = activeProjects.find((project) => project.id === selectedProjectId);
+  const currentGroups = selectedProject ? projectGroupsForPeriod(selectedProject, period.id) : [];
+  const [selectedGroupId, setSelectedGroupId] = useState(currentGroups[0]?.id || "");
+
+  useEffect(() => {
+    if (!currentGroups.length) {
+      setSelectedGroupId("");
+      return;
+    }
+    if (!currentGroups.some((group) => group.id === selectedGroupId)) {
+      setSelectedGroupId(currentGroups[0].id);
+    }
+  }, [currentGroups.map((group) => group.id).join("|"), selectedGroupId]);
 
   return html`
     <section className="space-y-4">
@@ -3706,9 +4104,28 @@ function StaffStudentPeriodPreview({ profile, period, projects, setToast, setKio
 
       ${selectedProject
         ? html`
+            <div className="vp-panel rounded-3xl p-4">
+              <label className="grid gap-2 text-sm font-bold text-slate-300 md:max-w-xl">
+                Preview group
+                <${Select}
+                  value=${selectedGroupId}
+                  onChange=${(event) => setSelectedGroupId(event.currentTarget.value)}
+                >
+                  ${currentGroups.map((group) => html`<option key=${group.id} value=${group.id}>${group.name}</option>`)}
+                </${Select}>
+              </label>
+            </div>
+          `
+        : null}
+
+      ${selectedProject
+        ? html`
             <${FilmingWorkspace}
               profile=${profile}
               project=${selectedProject}
+              contextPeriodId=${period.id}
+              contextGroupId=${selectedGroupId}
+              workflowMap=${workflowMap}
               setToast=${setToast}
               setKioskActive=${setKioskActive}
               previewMode=${true}
@@ -3725,13 +4142,35 @@ function StaffStudentPeriodPreview({ profile, period, projects, setToast, setKio
   `;
 }
 
-function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewMode = false }) {
+function FilmingWorkspace({
+  profile,
+  project,
+  enrollments = [],
+  contextPeriodId = "",
+  contextGroupId = "",
+  workflowMap = {},
+  setToast,
+  setKioskActive,
+  previewMode = false,
+}) {
   const [filmingMode, setFilmingMode] = useState(false);
   const [focusWarning, setFocusWarning] = useState(false);
   const [readMode, setReadMode] = useState(false);
   const [scriptDraft, setScriptDraft] = useState(() => normalizeScriptSections(project.scriptSections));
   const [scriptDirty, setScriptDirty] = useState(false);
   const [scriptSaving, setScriptSaving] = useState(false);
+  const workflowContext = resolveWorkflowContext({
+    project,
+    profile,
+    enrollments,
+    periodId: contextPeriodId,
+    groupId: contextGroupId,
+    previewMode,
+  });
+  const activeGroup = workflowContext.group;
+  const activeWorkflow = activeGroup
+    ? workflowForContext(project, workflowContext.periodId, activeGroup, workflowMap)
+    : null;
 
   useEffect(() => {
     if (!scriptDirty) setScriptDraft(normalizeScriptSections(project.scriptSections));
@@ -3780,10 +4219,11 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
     return () => window.clearTimeout(timeout);
   }, [scriptDraft, scriptDirty, project.id]);
 
-  const progress = projectProgress(project);
+  const progress = activeWorkflow ? checklistProgress(activeWorkflow.checklistItems) : emptyChecklistProgress();
 
   const toggleChecklist = async (itemId) => {
-    const nextItems = project.checklistItems.map((item) => {
+    if (!activeGroup || !activeWorkflow) return;
+    const nextItems = activeWorkflow.checklistItems.map((item) => {
       if (item.id !== itemId) return item;
       const completed = !item.completed;
       return {
@@ -3793,11 +4233,28 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
         completedAt: completed ? new Date().toISOString() : "",
       };
     });
-    await saveProjectPatch(project, profile, { checklistItems: nextItems }, "Updated checklist");
+    await saveGroupWorkflow(
+      project,
+      workflowContext.periodId,
+      activeGroup,
+      activeWorkflow,
+      profile,
+      { checklistItems: nextItems },
+      `Updated ${activeGroup.name} checklist`,
+    );
   };
 
   const updateFilmingField = async (field, value) => {
-    await saveProjectPatch(project, profile, { [field]: value }, `Updated ${field}`);
+    if (!activeGroup || !activeWorkflow) return;
+    await saveGroupWorkflow(
+      project,
+      workflowContext.periodId,
+      activeGroup,
+      activeWorkflow,
+      profile,
+      { [field]: value },
+      `Updated ${activeGroup.name} ${field}`,
+    );
   };
 
   const addScriptSection = () => {
@@ -3851,6 +4308,36 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
       "Removed shot",
     );
   };
+
+  if (!workflowContext.periodId) {
+    return html`
+      <${EmptyState}
+        icon=${LayoutGrid}
+        title="No period context"
+        body="This project is not connected to an active class period yet."
+      />
+    `;
+  }
+
+  if (!workflowContext.groups.length) {
+    return html`
+      <${EmptyState}
+        icon=${Users}
+        title="No groups for this project"
+        body="Your teacher needs to create groups for this period before students can use the filming workflow."
+      />
+    `;
+  }
+
+  if (!activeGroup) {
+    return html`
+      <${EmptyState}
+        icon=${Users}
+        title="You have not been assigned to a group"
+        body="You have not been assigned to a group for this project yet."
+      />
+    `;
+  }
 
   return html`
     <div className=${classNames(filmingMode ? "fixed inset-0 z-50 overflow-y-auto vp-kiosk px-3 py-3 sm:px-5" : "space-y-4")}>
@@ -3910,12 +4397,12 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
           </div>
           <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-slate-700/70">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Group</p>
-            <p className="mt-1 font-black text-white">${projectGroupLabel(project)}</p>
+            <p className="mt-1 font-black text-white">${activeGroup.name}</p>
           </div>
           <label className="grid gap-1 text-xs font-black uppercase tracking-[0.18em] text-slate-500">
             Status
             <${Select}
-              value=${project.filmingStatus || "Not started"}
+              value=${activeWorkflow.filmingStatus || "Not started"}
               onChange=${(event) => updateFilmingField("filmingStatus", event.currentTarget.value)}
             >
               ${FILMING_STATUSES.map((status) => html`<option key=${status} value=${status}>${status}</option>`)}
@@ -3924,7 +4411,7 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
           <label className="grid gap-1 text-xs font-black uppercase tracking-[0.18em] text-slate-500">
             Current task
             <${Select}
-              value=${project.currentTask || "Equipment pickup"}
+              value=${activeWorkflow.currentTask || "Equipment pickup"}
               onChange=${(event) => updateFilmingField("currentTask", event.currentTarget.value)}
             >
               ${CURRENT_TASKS.map((task) => html`<option key=${task} value=${task}>${task}</option>`)}
@@ -3932,24 +4419,16 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
           </label>
         </div>
 
-        ${project.groups?.length
+        ${activeGroup
           ? html`
               <div className="mt-4 rounded-2xl bg-slate-950/35 p-3 ring-1 ring-slate-700/70">
-                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Project groups</p>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  ${project.groups.map(
-                    (group) => html`
-                      <div key=${group.id} className="rounded-xl bg-slate-950/45 p-3">
-                        <p className="font-black text-white">${group.name}</p>
-                        <p className="mt-1 text-sm text-slate-400">
-                          ${group.assignedStudentEmails.length
-                            ? group.assignedStudentEmails.map(titleFromEmail).join(", ")
-                            : "No students assigned yet"}
-                        </p>
-                      </div>
-                    `,
-                  )}
-                </div>
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Active group</p>
+                <p className="mt-2 font-black text-white">${activeGroup.name}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-400">
+                  ${activeGroup.assignedStudentEmails.length
+                    ? activeGroup.assignedStudentEmails.map(titleFromEmail).join(", ")
+                    : "No students assigned yet"}
+                </p>
               </div>
             `
           : null}
@@ -3975,7 +4454,7 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
         : null}
 
       <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-        <${ProductionChecklist} items=${project.checklistItems} onToggle=${toggleChecklist} />
+        <${ProductionChecklist} items=${activeWorkflow.checklistItems} onToggle=${toggleChecklist} />
         <${ScriptWritingPanel}
           sections=${scriptDraft}
           saving=${scriptSaving}
@@ -3987,7 +4466,7 @@ function FilmingWorkspace({ profile, project, setToast, setKioskActive, previewM
 
       <${ShotPlanningPanel}
         shots=${project.shotList}
-        students=${project.assignedStudentEmails}
+        students=${activeGroup.assignedStudentEmails}
         onAdd=${addShot}
         onUpdate=${updateShot}
         onRemove=${removeShot}
@@ -4726,6 +5205,11 @@ function VideoProductionApp() {
     enrollments,
     periods,
   );
+  const {
+    workflows: projectGroupWorkflows,
+    loading: workflowsLoading,
+    error: workflowsError,
+  } = useProjectGroupWorkflows(profile, projects);
   const { users, loading: usersLoading, error: usersError } = useVideoUsers(isVideoAdmin(profile));
   const { profiles: studentProfiles, error: profilesError } = useVideoStudentProfiles(
     isVideoTeacher(profile) || isVideoAdmin(profile),
@@ -4801,6 +5285,7 @@ function VideoProductionApp() {
         profile=${profile}
         period=${previewPeriod}
         projects=${previewPeriodProjects}
+        workflowMap=${projectGroupWorkflows}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         onClose=${() => setPreviewPeriodId("")}
@@ -4811,6 +5296,7 @@ function VideoProductionApp() {
       <${AdminStudentPreview}
         profile=${profile}
         project=${previewProject}
+        workflowMap=${projectGroupWorkflows}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         onClose=${() => setPreviewProjectId("")}
@@ -4828,6 +5314,9 @@ function VideoProductionApp() {
         enrollmentsLoading=${enrollmentsLoading}
         enrollmentsError=${enrollmentsError}
         periodsLoading=${periodsLoading}
+        workflowMap=${projectGroupWorkflows}
+        workflowsLoading=${workflowsLoading}
+        workflowsError=${workflowsError}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
       />
@@ -4839,10 +5328,11 @@ function VideoProductionApp() {
       <${MonitorDashboard}
         projects=${projects}
         loading=${projectsLoading}
-        error=${projectsError || periodsError || enrollmentsError || profilesError}
+        error=${projectsError || periodsError || enrollmentsError || profilesError || workflowsError}
         studentProfiles=${studentProfiles}
         periods=${periods}
         enrollments=${enrollments}
+        workflowMap=${projectGroupWorkflows}
         selectedPeriodId=${selectedPeriodId}
         setSelectedPeriodId=${setSelectedPeriodId}
         onPreviewPeriod=${(periodId) => {

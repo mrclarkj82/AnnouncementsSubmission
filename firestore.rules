@@ -286,6 +286,14 @@ service cloud.firestore {
         && canReadVideoProject(get(videoProjectPath(projectId)).data);
     }
 
+    function canManageVideoProjectId(projectId) {
+      return exists(videoProjectPath(projectId))
+        && (
+          isVideoAdmin()
+          || isAssignedVideoTeacher(get(videoProjectPath(projectId)).data)
+        );
+    }
+
     function validVideoProjectBase() {
       return request.resource.data.assignedTeacherEmail is string
         && request.resource.data.assignedTeacherEmail.matches('^[^@]+@doralacademynv\\.org$')
@@ -300,6 +308,45 @@ service cloud.firestore {
           )
         )
         && validVideoProjectStatus(request.resource.data.status);
+    }
+
+    function validProjectGroupWorkflow(workflowId) {
+      return request.resource.data.keys().hasOnly([
+          "workflowId",
+          "projectId",
+          "periodId",
+          "groupId",
+          "projectTitle",
+          "periodName",
+          "groupName",
+          "assignedStudentEmails",
+          "assignedStudentNames",
+          "filmingStatus",
+          "currentTask",
+          "checklistItems",
+          "checklistCompletedCount",
+          "checklistTotal",
+          "updatedAt",
+          "updatedBy",
+          "updatedByEmail"
+        ])
+        && request.resource.data.workflowId == workflowId
+        && request.resource.data.projectId is string
+        && request.resource.data.periodId is string
+        && request.resource.data.groupId is string
+        && request.resource.data.projectTitle is string
+        && request.resource.data.periodName is string
+        && request.resource.data.groupName is string
+        && request.resource.data.assignedStudentEmails is list
+        && request.resource.data.assignedStudentNames is list
+        && request.resource.data.filmingStatus is string
+        && request.resource.data.currentTask is string
+        && request.resource.data.checklistItems is list
+        && request.resource.data.checklistCompletedCount is number
+        && request.resource.data.checklistTotal is number
+        && request.resource.data.updatedBy is string
+        && request.resource.data.updatedByEmail is string
+        && request.resource.data.updatedByEmail == request.resource.data.updatedByEmail.lower();
     }
 
     function validPeriod(periodId) {
@@ -798,6 +845,45 @@ service cloud.firestore {
           "lastActivityAt",
           "lastActivityBy"
         ]);
+      allow delete: if isVideoAdmin();
+    }
+
+    match /projectGroupWorkflows/{workflowId} {
+      allow get: if isVideoAdmin()
+        || isVideoTeacher()
+        || (
+          isVideoStudent()
+          && !exists(/databases/$(database)/documents/projectGroupWorkflows/$(workflowId))
+        )
+        || (
+          isVideoStudent()
+          && signedInEmail() in resource.data.assignedStudentEmails
+          && canReadVideoProjectId(resource.data.projectId)
+        );
+      allow list: if isVideoAdmin() || isVideoTeacher();
+      allow create: if validProjectGroupWorkflow(workflowId)
+        && (
+          canManageVideoProjectId(request.resource.data.projectId)
+          || (
+            isVideoStudent()
+            && signedInEmail() in request.resource.data.assignedStudentEmails
+            && canReadVideoProjectId(request.resource.data.projectId)
+          )
+        );
+      allow update: if validProjectGroupWorkflow(workflowId)
+        && request.resource.data.workflowId == resource.data.workflowId
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.periodId == resource.data.periodId
+        && request.resource.data.groupId == resource.data.groupId
+        && (
+          canManageVideoProjectId(resource.data.projectId)
+          || (
+            isVideoStudent()
+            && signedInEmail() in resource.data.assignedStudentEmails
+            && signedInEmail() in request.resource.data.assignedStudentEmails
+            && canReadVideoProjectId(resource.data.projectId)
+          )
+        );
       allow delete: if isVideoAdmin();
     }
 
