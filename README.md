@@ -42,6 +42,8 @@ Video Production workflow progress is tracked per project, period, and group in 
 
 The Video Production Grade tab lets teachers/admins grade by Period -> Unit -> Assignment/Project. Student groups paste Google Drive submission links in their filming workflow, Drive previews are embedded when Google allows it, and the app does not download or proxy student videos through the server. Grades, published feedback, private teacher notes, and submission metadata are stored per project, period, and group in `projectGroupWorkflows`; existing projects without a unit are treated as Unit 1.
 
+Student submissions now include Planning / Pre-Production writing plus a 7-category, 10-point student self-assessment rubric. The Grade tab shows the student self-score with an expandable category breakdown, while teachers use the same 7-category rubric for the official group-scoped grade by project, period, and group. Private teacher notes are stored separately from student-readable workflow data.
+
 ## Future Review Studio
 
 Google Drive preview iframes are cross-origin, so the app cannot reliably draw inside, control, or modify the Drive video player. A future Review Studio should store timestamped comments, optional drawing data, and optional voiceover feedback as app data alongside the submission. For direct browser-playable video URLs, a future implementation could use an HTML5 video element with a canvas overlay and MediaRecorder, but recorded feedback storage needs a safe backend decision first.

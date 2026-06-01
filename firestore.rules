@@ -331,6 +331,15 @@ service cloud.firestore {
           "submittedAt",
           "submittedBy",
           "submittedByEmail",
+          "planningText",
+          "studentSelfAssessment",
+          "studentSelfAssessmentTotal",
+          "studentSelfAssessmentUpdatedAt",
+          "studentSelfAssessmentUpdatedBy",
+          "studentSelfAssessmentUpdatedByEmail",
+          "teacherRubricScores",
+          "teacherRubricComplete",
+          "teacherRubricTotal",
           "score",
           "maxScore",
           "letterGrade",
@@ -364,6 +373,14 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAny(["submissionType"]) || request.resource.data.submissionType is string)
         && (!request.resource.data.keys().hasAny(["submittedBy"]) || request.resource.data.submittedBy is string)
         && (!request.resource.data.keys().hasAny(["submittedByEmail"]) || request.resource.data.submittedByEmail is string)
+        && (!request.resource.data.keys().hasAny(["planningText"]) || request.resource.data.planningText is string)
+        && (!request.resource.data.keys().hasAny(["studentSelfAssessment"]) || request.resource.data.studentSelfAssessment is map)
+        && (!request.resource.data.keys().hasAny(["studentSelfAssessmentTotal"]) || request.resource.data.studentSelfAssessmentTotal is number)
+        && (!request.resource.data.keys().hasAny(["studentSelfAssessmentUpdatedBy"]) || request.resource.data.studentSelfAssessmentUpdatedBy is string)
+        && (!request.resource.data.keys().hasAny(["studentSelfAssessmentUpdatedByEmail"]) || request.resource.data.studentSelfAssessmentUpdatedByEmail is string)
+        && (!request.resource.data.keys().hasAny(["teacherRubricScores"]) || request.resource.data.teacherRubricScores is map)
+        && (!request.resource.data.keys().hasAny(["teacherRubricComplete"]) || request.resource.data.teacherRubricComplete is map)
+        && (!request.resource.data.keys().hasAny(["teacherRubricTotal"]) || request.resource.data.teacherRubricTotal is number)
         && (!request.resource.data.keys().hasAny(["score"]) || request.resource.data.score is string || request.resource.data.score is number)
         && (!request.resource.data.keys().hasAny(["maxScore"]) || request.resource.data.maxScore is string || request.resource.data.maxScore is number)
         && (!request.resource.data.keys().hasAny(["letterGrade"]) || request.resource.data.letterGrade is string)
@@ -390,7 +407,10 @@ service cloud.firestore {
         "reviewed",
         "gradedAt",
         "gradedBy",
-        "gradedByEmail"
+        "gradedByEmail",
+        "teacherRubricScores",
+        "teacherRubricComplete",
+        "teacherRubricTotal"
       ]);
     }
 
@@ -406,11 +426,38 @@ service cloud.firestore {
         "submittedAt",
         "submittedBy",
         "submittedByEmail",
+        "planningText",
+        "studentSelfAssessment",
+        "studentSelfAssessmentTotal",
+        "studentSelfAssessmentUpdatedAt",
+        "studentSelfAssessmentUpdatedBy",
+        "studentSelfAssessmentUpdatedByEmail",
         "unit",
         "updatedAt",
         "updatedBy",
         "updatedByEmail"
       ]);
+    }
+
+    function validProjectGroupPrivateNote(workflowId) {
+      return request.resource.data.keys().hasOnly([
+          "workflowId",
+          "projectId",
+          "periodId",
+          "groupId",
+          "privateNotes",
+          "updatedAt",
+          "updatedBy",
+          "updatedByEmail"
+        ])
+        && request.resource.data.workflowId == workflowId
+        && request.resource.data.projectId is string
+        && request.resource.data.periodId is string
+        && request.resource.data.groupId is string
+        && request.resource.data.privateNotes is string
+        && request.resource.data.updatedBy is string
+        && request.resource.data.updatedByEmail is string
+        && request.resource.data.updatedByEmail == request.resource.data.updatedByEmail.lower();
     }
 
     function validPeriod(periodId) {
@@ -922,6 +969,10 @@ service cloud.firestore {
         || (
           isVideoStudent()
           && signedInEmail() in resource.data.assignedStudentEmails
+          && (
+            !resource.data.keys().hasAny(["privateNotes"])
+            || resource.data.privateNotes == ""
+          )
           && canReadVideoProjectId(resource.data.projectId)
         );
       allow list: if isVideoAdmin() || isVideoTeacher();
@@ -949,6 +1000,17 @@ service cloud.firestore {
         && signedInEmail() in request.resource.data.assignedStudentEmails
         && canReadVideoProjectId(resource.data.projectId);
       allow delete: if isVideoAdmin();
+    }
+
+    match /projectGroupPrivateNotes/{workflowId} {
+      allow get, list: if isVideoAdmin() || isVideoTeacher();
+      allow create, update: if validProjectGroupPrivateNote(workflowId)
+        && canManageVideoProjectId(request.resource.data.projectId);
+      allow delete: if isVideoAdmin()
+        || (
+          resource.data.projectId is string
+          && canManageVideoProjectId(resource.data.projectId)
+        );
     }
 
     match /videoStudentProfiles/{studentEmail} {

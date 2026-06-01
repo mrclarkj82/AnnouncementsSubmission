@@ -106,6 +106,44 @@ const DEFAULT_SHOTS = [
   "Closing shot",
 ];
 
+const VIDEO_PRODUCTION_RUBRIC = [
+  {
+    id: "planning",
+    label: "Planning / Pre-Production",
+    maxPoints: 1,
+  },
+  {
+    id: "camera",
+    label: "Camera Work / Shot Composition",
+    maxPoints: 2,
+  },
+  {
+    id: "audio",
+    label: "Audio Quality",
+    maxPoints: 1,
+  },
+  {
+    id: "lighting",
+    label: "Lighting / Visual Quality",
+    maxPoints: 1,
+  },
+  {
+    id: "editing",
+    label: "Editing in DaVinci Resolve",
+    maxPoints: 2,
+  },
+  {
+    id: "story",
+    label: "Story / Purpose",
+    maxPoints: 2,
+  },
+  {
+    id: "teamwork",
+    label: "Teamwork / Equipment Use",
+    maxPoints: 1,
+  },
+];
+
 const PROJECT_STATUSES = ["active", "paused", "complete", "archived"];
 const PROJECT_UNITS = [1, 2, 3, 4];
 const FILMING_STATUSES = [
@@ -905,6 +943,42 @@ function getGoogleDrivePreviewUrl(url) {
   return fileId ? `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview` : "";
 }
 
+function getRubricMaxTotal() {
+  return VIDEO_PRODUCTION_RUBRIC.reduce((total, item) => total + item.maxPoints, 0);
+}
+
+function clampRubricScore(value, maxPoints) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 0;
+  return Math.min(maxPoints, Math.max(0, Math.round(score)));
+}
+
+function normalizeRubricScores(scores) {
+  const source = scores && typeof scores === "object" ? scores : {};
+  return VIDEO_PRODUCTION_RUBRIC.reduce((result, item) => {
+    result[item.id] = clampRubricScore(source[item.id], item.maxPoints);
+    return result;
+  }, {});
+}
+
+function normalizeRubricComplete(complete, scores = {}) {
+  const source = complete && typeof complete === "object" ? complete : {};
+  const normalizedScores = normalizeRubricScores(scores);
+  return VIDEO_PRODUCTION_RUBRIC.reduce((result, item) => {
+    result[item.id] = source[item.id] === true || normalizedScores[item.id] >= item.maxPoints;
+    return result;
+  }, {});
+}
+
+function calculateRubricTotal(scores) {
+  const normalizedScores = normalizeRubricScores(scores);
+  return VIDEO_PRODUCTION_RUBRIC.reduce((total, item) => total + normalizedScores[item.id], 0);
+}
+
+function formatRubricScore(total, maxTotal = getRubricMaxTotal()) {
+  return `${clampRubricScore(total, maxTotal)}/${maxTotal}`;
+}
+
 function numericGrade(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -931,7 +1005,12 @@ function hasSubmittedWorkflow(workflow) {
 }
 
 function hasWorkflowGrade(workflow) {
-  return Boolean(workflow?.reviewed || workflow?.gradedAt || valueText(workflow?.score));
+  return Boolean(
+    workflow?.reviewed ||
+      workflow?.gradedAt ||
+      calculateRubricTotal(workflow?.teacherRubricScores) > 0 ||
+      valueText(workflow?.score),
+  );
 }
 
 function defaultGroupWorkflow(project, periodId, group) {
@@ -959,8 +1038,17 @@ function defaultGroupWorkflow(project, periodId, group) {
     submittedAt: "",
     submittedBy: "",
     submittedByEmail: "",
+    planningText: "",
+    studentSelfAssessment: normalizeRubricScores({}),
+    studentSelfAssessmentTotal: 0,
+    studentSelfAssessmentUpdatedAt: "",
+    studentSelfAssessmentUpdatedBy: "",
+    studentSelfAssessmentUpdatedByEmail: "",
+    teacherRubricScores: normalizeRubricScores({}),
+    teacherRubricComplete: normalizeRubricComplete({}),
+    teacherRubricTotal: 0,
     score: "",
-    maxScore: "100",
+    maxScore: String(getRubricMaxTotal()),
     letterGrade: "",
     feedback: "",
     privateNotes: "",
@@ -1002,8 +1090,17 @@ function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
     submittedAt: workflow?.submittedAt || "",
     submittedBy: safeText(workflow?.submittedBy),
     submittedByEmail: normalizeEmail(workflow?.submittedByEmail),
+    planningText: safeText(workflow?.planningText),
+    studentSelfAssessment: normalizeRubricScores(workflow?.studentSelfAssessment),
+    studentSelfAssessmentTotal: calculateRubricTotal(workflow?.studentSelfAssessment),
+    studentSelfAssessmentUpdatedAt: workflow?.studentSelfAssessmentUpdatedAt || "",
+    studentSelfAssessmentUpdatedBy: safeText(workflow?.studentSelfAssessmentUpdatedBy),
+    studentSelfAssessmentUpdatedByEmail: normalizeEmail(workflow?.studentSelfAssessmentUpdatedByEmail),
+    teacherRubricScores: normalizeRubricScores(workflow?.teacherRubricScores),
+    teacherRubricComplete: normalizeRubricComplete(workflow?.teacherRubricComplete, workflow?.teacherRubricScores),
+    teacherRubricTotal: calculateRubricTotal(workflow?.teacherRubricScores),
     score: workflow?.score ?? "",
-    maxScore: workflow?.maxScore ?? "100",
+    maxScore: workflow?.maxScore ?? String(getRubricMaxTotal()),
     letterGrade: safeText(workflow?.letterGrade) || letterGradeForPercent(gradePercent(workflow?.score, workflow?.maxScore)),
     feedback: safeText(workflow?.feedback),
     privateNotes: safeText(workflow?.privateNotes),
@@ -1659,6 +1756,35 @@ function useVideoStudentProfiles(enabled) {
   return { profiles, error };
 }
 
+function useProjectGroupPrivateNotes(enabled) {
+  const [notes, setNotes] = useState({});
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!enabled) {
+      setNotes({});
+      setError("");
+      return undefined;
+    }
+
+    const unsubscribe = onSnapshot(
+      collection(db, "projectGroupPrivateNotes"),
+      (snapshot) => {
+        setNotes(
+          Object.fromEntries(
+            snapshot.docs.map((item) => [item.id, { id: item.id, ...item.data() }]),
+          ),
+        );
+        setError("");
+      },
+      (snapshotError) => setError(snapshotError.message),
+    );
+    return unsubscribe;
+  }, [enabled]);
+
+  return { notes, error };
+}
+
 async function addActivity(project, profile, action) {
   try {
     await addDoc(collection(db, "videoActivityLogs"), {
@@ -1715,6 +1841,9 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
     "submissionType",
     "submittedBy",
     "submittedByEmail",
+    "planningText",
+    "studentSelfAssessmentUpdatedBy",
+    "studentSelfAssessmentUpdatedByEmail",
     "score",
     "maxScore",
     "letterGrade",
@@ -1728,10 +1857,24 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
   if (hasOwn(patch, "submissionUrl")) {
     payload.submissionUrl = normalizeGoogleDriveUrl(patch.submissionUrl) || safeText(patch.submissionUrl);
   }
+  if (hasOwn(patch, "studentSelfAssessment")) {
+    payload.studentSelfAssessment = normalizeRubricScores(patch.studentSelfAssessment);
+    payload.studentSelfAssessmentTotal = calculateRubricTotal(payload.studentSelfAssessment);
+  }
+  if (hasOwn(patch, "teacherRubricScores")) {
+    payload.teacherRubricScores = normalizeRubricScores(patch.teacherRubricScores);
+    payload.teacherRubricTotal = calculateRubricTotal(payload.teacherRubricScores);
+  }
+  if (hasOwn(patch, "teacherRubricComplete")) {
+    payload.teacherRubricComplete = normalizeRubricComplete(
+      patch.teacherRubricComplete,
+      payload.teacherRubricScores || baseWorkflow.teacherRubricScores,
+    );
+  }
   ["feedbackPublished", "reviewed"].forEach((field) => {
     if (hasOwn(patch, field)) payload[field] = patch[field] === true;
   });
-  ["submittedAt", "gradedAt"].forEach((field) => {
+  ["submittedAt", "studentSelfAssessmentUpdatedAt", "gradedAt"].forEach((field) => {
     if (hasOwn(patch, field)) payload[field] = patch[field];
   });
   if (hasOwn(patch, "unit")) payload.unit = getProjectUnit({ unit: patch.unit });
@@ -1743,6 +1886,24 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
     lastActivityBy: profile.email,
   });
   if (action) await addActivity(project, profile, action);
+}
+
+async function saveProjectGroupPrivateNote(project, periodId, group, profile, privateNotes) {
+  const workflowId = projectGroupWorkflowId(project.id, periodId, group.id);
+  await setDoc(
+    doc(db, "projectGroupPrivateNotes", workflowId),
+    {
+      workflowId,
+      projectId: project.id,
+      periodId,
+      groupId: group.id,
+      privateNotes: safeText(privateNotes),
+      updatedAt: serverTimestamp(),
+      updatedBy: profile.uid || "",
+      updatedByEmail: normalizeEmail(profile.email),
+    },
+    { merge: true },
+  );
 }
 
 async function syncExistingGroupWorkflowRoster(project, periodId, group, profile, assignedStudentEmails = null) {
@@ -2280,7 +2441,7 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
   `;
 }
 
-function GradeDashboard({ projects, loading, error, periods, workflowMap, profile, setToast }) {
+function GradeDashboard({ projects, loading, error, periods, workflowMap, privateNotesMap, profile, setToast }) {
   const activePeriods = getActivePeriods(periods);
   const [selectedPeriodId, setSelectedPeriodId] = useState("");
   const [selectedUnit, setSelectedUnit] = useState("");
@@ -2460,6 +2621,7 @@ function GradeDashboard({ projects, loading, error, periods, workflowMap, profil
                                     period=${item.period}
                                     group=${item.group}
                                     workflow=${item.workflow}
+                                    privateNote=${privateNotesMap[item.workflow.id]}
                                     profile=${profile}
                                     setToast=${setToast}
                                   />
@@ -2482,37 +2644,83 @@ function GradeSummaryTile({ label, value }) {
   `;
 }
 
-function GradeSubmissionCard({ project, period, group, workflow, profile, setToast }) {
+function GradeSubmissionCard({ project, period, group, workflow, privateNote, profile, setToast }) {
   const [draft, setDraft] = useState(() => ({
-    score: valueText(workflow.score),
-    maxScore: valueText(workflow.maxScore || "100"),
+    teacherRubricScores: normalizeRubricScores(workflow.teacherRubricScores),
+    teacherRubricComplete: normalizeRubricComplete(workflow.teacherRubricComplete, workflow.teacherRubricScores),
     feedback: safeText(workflow.feedback),
-    privateNotes: safeText(workflow.privateNotes),
+    privateNotes: safeText(privateNote?.privateNotes || workflow.privateNotes),
     feedbackPublished: workflow.feedbackPublished === true,
   }));
+  const [selfExpanded, setSelfExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const previewUrl = getGoogleDrivePreviewUrl(workflow.submissionUrl);
   const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
-  const percent = gradePercent(draft.score, draft.maxScore);
-  const letterGrade = letterGradeForPercent(percent);
+  const rubricMaxTotal = getRubricMaxTotal();
+  const teacherTotal = calculateRubricTotal(draft.teacherRubricScores);
+  const teacherPercent = gradePercent(teacherTotal, rubricMaxTotal);
+  const teacherLetterGrade = letterGradeForPercent(teacherPercent);
+  const studentScores = normalizeRubricScores(workflow.studentSelfAssessment);
+  const studentTotal = calculateRubricTotal(studentScores);
+  const hasStudentSelfAssessment = Boolean(studentTotal || workflow.studentSelfAssessmentUpdatedAt);
   const submitted = hasSubmittedWorkflow(workflow);
   const graded = hasWorkflowGrade(workflow);
 
   useEffect(() => {
     setDraft({
-      score: valueText(workflow.score),
-      maxScore: valueText(workflow.maxScore || "100"),
+      teacherRubricScores: normalizeRubricScores(workflow.teacherRubricScores),
+      teacherRubricComplete: normalizeRubricComplete(workflow.teacherRubricComplete, workflow.teacherRubricScores),
       feedback: safeText(workflow.feedback),
-      privateNotes: safeText(workflow.privateNotes),
+      privateNotes: safeText(privateNote?.privateNotes || workflow.privateNotes),
       feedbackPublished: workflow.feedbackPublished === true,
     });
-  }, [workflow.id, workflow.score, workflow.maxScore, workflow.feedback, workflow.privateNotes, workflow.feedbackPublished]);
+  }, [
+    workflow.id,
+    workflow.teacherRubricScores,
+    workflow.teacherRubricComplete,
+    workflow.feedback,
+    workflow.privateNotes,
+    privateNote?.privateNotes,
+    workflow.feedbackPublished,
+  ]);
 
   const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
+  const updateTeacherRubricScore = (rubricItem, value) => {
+    const score = clampRubricScore(value, rubricItem.maxPoints);
+    setDraft((current) => ({
+      ...current,
+      teacherRubricScores: {
+        ...current.teacherRubricScores,
+        [rubricItem.id]: score,
+      },
+      teacherRubricComplete: {
+        ...current.teacherRubricComplete,
+        [rubricItem.id]: score >= rubricItem.maxPoints,
+      },
+    }));
+  };
+
+  const toggleTeacherRubricComplete = (rubricItem, checked) => {
+    setDraft((current) => ({
+      ...current,
+      teacherRubricScores: {
+        ...current.teacherRubricScores,
+        [rubricItem.id]: checked ? rubricItem.maxPoints : current.teacherRubricScores[rubricItem.id],
+      },
+      teacherRubricComplete: {
+        ...current.teacherRubricComplete,
+        [rubricItem.id]: checked,
+      },
+    }));
+  };
 
   const saveGrade = async () => {
     setBusy(true);
     try {
+      const normalizedTeacherScores = normalizeRubricScores(draft.teacherRubricScores);
+      const normalizedTeacherComplete = normalizeRubricComplete(draft.teacherRubricComplete, normalizedTeacherScores);
+      const nextTeacherTotal = calculateRubricTotal(normalizedTeacherScores);
+      const nextTeacherPercent = gradePercent(nextTeacherTotal, rubricMaxTotal);
       await saveGroupWorkflow(
         project,
         period.id,
@@ -2520,11 +2728,14 @@ function GradeSubmissionCard({ project, period, group, workflow, profile, setToa
         workflow,
         profile,
         {
-          score: safeText(draft.score),
-          maxScore: safeText(draft.maxScore || "100"),
-          letterGrade,
+          teacherRubricScores: normalizedTeacherScores,
+          teacherRubricComplete: normalizedTeacherComplete,
+          teacherRubricTotal: nextTeacherTotal,
+          score: String(nextTeacherTotal),
+          maxScore: String(rubricMaxTotal),
+          letterGrade: letterGradeForPercent(nextTeacherPercent),
           feedback: safeText(draft.feedback),
-          privateNotes: safeText(draft.privateNotes),
+          privateNotes: "",
           feedbackPublished: draft.feedbackPublished === true,
           reviewed: true,
           gradedAt: serverTimestamp(),
@@ -2534,6 +2745,7 @@ function GradeSubmissionCard({ project, period, group, workflow, profile, setToa
         },
         `Saved grade for ${group.name}`,
       );
+      await saveProjectGroupPrivateNote(project, period.id, group, profile, draft.privateNotes);
       setToast(`Grade saved for ${group.name}`);
     } catch (gradeError) {
       setToast(gradeError.message);
@@ -2607,39 +2819,89 @@ function GradeSubmissionCard({ project, period, group, workflow, profile, setToa
                   </div>
                 </div>
               `}
+          <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Student Planning / Pre-Production</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">
+              ${safeText(workflow.planningText) || "No planning/pre-production response submitted."}
+            </p>
+          </div>
+          <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-3 text-left"
+              aria-expanded=${selfExpanded}
+              onClick=${() => setSelfExpanded((current) => !current)}
+            >
+              <span>
+                <span className="block text-xs font-black uppercase tracking-[0.18em] text-slate-500">Student Self-Score</span>
+                <span className="mt-1 block font-black text-white">
+                  ${hasStudentSelfAssessment
+                    ? formatRubricScore(studentTotal, rubricMaxTotal)
+                    : "No student self-assessment submitted."}
+                </span>
+              </span>
+              <${ChevronDown}
+                size=${18}
+                className=${classNames("shrink-0 text-slate-400 transition-transform", selfExpanded ? "rotate-180" : "")}
+              />
+            </button>
+            ${selfExpanded
+              ? html`
+                  <div className="mt-3 grid gap-2">
+                    ${VIDEO_PRODUCTION_RUBRIC.map(
+                      (item) => html`
+                        <div key=${item.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-950/45 px-3 py-2 text-sm">
+                          <span className="font-bold text-slate-300">${item.label}</span>
+                          <span className="font-black text-white">${studentScores[item.id]}/${item.maxPoints}</span>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                `
+              : null}
+          </div>
         </section>
 
         <section className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Grade</p>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Teacher Rubric</p>
               <p className="mt-1 font-black text-white">
-                ${percent === null ? "No score yet" : `${percent}%${letterGrade ? ` - ${letterGrade}` : ""}`}
+                Teacher Score: ${formatRubricScore(teacherTotal, rubricMaxTotal)}
+                ${teacherLetterGrade ? ` - ${teacherLetterGrade}` : ""}
               </p>
             </div>
             <${Badge} icon=${workflow.reviewed ? CheckCircle2 : Circle}>${workflow.reviewed ? "Reviewed" : "Needs review"}</${Badge}>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-sm font-bold text-slate-300">
-              Score
-              <${TextInput}
-                type="number"
-                min="0"
-                value=${draft.score}
-                onInput=${(event) => updateDraft("score", event.currentTarget.value)}
-                placeholder="92"
-              />
-            </label>
-            <label className="grid gap-1 text-sm font-bold text-slate-300">
-              Max score
-              <${TextInput}
-                type="number"
-                min="1"
-                value=${draft.maxScore}
-                onInput=${(event) => updateDraft("maxScore", event.currentTarget.value)}
-                placeholder="100"
-              />
-            </label>
+          <div className="grid gap-2">
+            ${VIDEO_PRODUCTION_RUBRIC.map(
+              (item) => html`
+                <div key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[5.5rem_1fr_auto] sm:items-center">
+                  <label className="flex items-center gap-2 text-sm font-black text-white">
+                    <${TextInput}
+                      type="number"
+                      min="0"
+                      max=${item.maxPoints}
+                      step="1"
+                      value=${draft.teacherRubricScores[item.id]}
+                      onInput=${(event) => updateTeacherRubricScore(item, event.currentTarget.value)}
+                      aria-label=${`${item.label} teacher score`}
+                      className="w-16 py-2"
+                    />
+                    <span className="text-slate-400">/ ${item.maxPoints}</span>
+                  </label>
+                  <p className="text-sm font-bold text-slate-200">${item.label}</p>
+                  <label className="flex items-center gap-2 text-sm font-bold text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked=${draft.teacherRubricComplete[item.id] === true}
+                      onChange=${(event) => toggleTeacherRubricComplete(item, event.currentTarget.checked)}
+                    />
+                    Complete
+                  </label>
+                </div>
+              `,
+            )}
           </div>
           <label className="mt-3 grid gap-1 text-sm font-bold text-slate-300">
             Teacher feedback
@@ -5180,22 +5442,41 @@ function FilmingWorkspace({
 
 function StudentSubmissionPanel({ project, periodId, group, workflow, profile, setToast }) {
   const [submissionDraft, setSubmissionDraft] = useState(() => safeText(workflow.submissionUrl));
+  const [planningDraft, setPlanningDraft] = useState(() => safeText(workflow.planningText));
+  const [selfAssessmentDraft, setSelfAssessmentDraft] = useState(() =>
+    normalizeRubricScores(workflow.studentSelfAssessment),
+  );
   const [busy, setBusy] = useState(false);
   const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
-  const percent = gradePercent(workflow.score, workflow.maxScore);
+  const rubricMaxTotal = getRubricMaxTotal();
+  const studentSelfTotal = calculateRubricTotal(selfAssessmentDraft);
+  const teacherTotal = calculateRubricTotal(workflow.teacherRubricScores);
+  const hasTeacherRubricGrade = Boolean(workflow.reviewed || workflow.gradedAt || teacherTotal);
+  const percent = gradePercent(teacherTotal, rubricMaxTotal);
   const publishedFeedback = workflow.feedbackPublished === true;
 
   useEffect(() => {
     setSubmissionDraft(safeText(workflow.submissionUrl));
-  }, [workflow.id, workflow.submissionUrl]);
+    setPlanningDraft(safeText(workflow.planningText));
+    setSelfAssessmentDraft(normalizeRubricScores(workflow.studentSelfAssessment));
+  }, [workflow.id, workflow.submissionUrl, workflow.planningText, workflow.studentSelfAssessment]);
 
-  const saveSubmission = async (event) => {
-    event.preventDefault();
+  const updateSelfAssessment = (rubricItem, value) => {
+    const score = clampRubricScore(value, rubricItem.maxPoints);
+    setSelfAssessmentDraft((current) => ({
+      ...current,
+      [rubricItem.id]: score,
+    }));
+  };
+
+  const saveSubmission = async (event = null) => {
+    event?.preventDefault?.();
     const normalizedUrl = normalizeGoogleDriveUrl(submissionDraft);
-    if (!normalizedUrl || !isLikelyGoogleDriveUrl(normalizedUrl)) {
+    if (safeText(submissionDraft) && (!normalizedUrl || !isLikelyGoogleDriveUrl(normalizedUrl))) {
       setToast("Paste a valid Google Drive link before submitting.");
       return;
     }
+    const normalizedSelfAssessment = normalizeRubricScores(selfAssessmentDraft);
 
     setBusy(true);
     try {
@@ -5211,11 +5492,17 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
           submittedAt: serverTimestamp(),
           submittedBy: profile.uid || "",
           submittedByEmail: normalizeEmail(profile.email),
+          planningText: safeText(planningDraft),
+          studentSelfAssessment: normalizedSelfAssessment,
+          studentSelfAssessmentTotal: calculateRubricTotal(normalizedSelfAssessment),
+          studentSelfAssessmentUpdatedAt: serverTimestamp(),
+          studentSelfAssessmentUpdatedBy: profile.uid || "",
+          studentSelfAssessmentUpdatedByEmail: normalizeEmail(profile.email),
           unit: getProjectUnit(project),
         },
-        `Submitted ${group.name} Drive link`,
+        `Updated ${group.name} submission`,
       );
-      setToast("Submission link saved");
+      setToast("Submission saved");
     } catch (submissionError) {
       setToast(submissionError.message);
     } finally {
@@ -5228,6 +5515,19 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
       <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
         <div>
           <div className="mb-3">
+            <h2 className="text-lg font-black text-white">Planning / Pre-Production</h2>
+            <p className="text-sm leading-6 text-slate-400">
+              Describe your concept, script idea, shot list, roles, plan, or other pre-production work.
+            </p>
+          </div>
+          <${Textarea}
+            value=${planningDraft}
+            onInput=${(event) => setPlanningDraft(event.currentTarget.value)}
+            placeholder="Describe your concept, plan, roles, shot list, or pre-production work..."
+            className="min-h-36"
+          />
+
+          <div className="mb-3 mt-5">
             <h2 className="text-lg font-black text-white">Final Submission</h2>
             <p className="text-sm leading-6 text-slate-400">
               Paste the group's Google Drive video link here. The teacher can preview it in Grade.
@@ -5241,7 +5541,7 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
               aria-label="Google Drive submission link"
             />
             <${Button} icon=${Save} type="submit" disabled=${busy}>
-              ${busy ? "Saving..." : "Save Link"}
+              ${busy ? "Saving..." : "Save Submission"}
             </${Button}>
           </form>
           ${openUrl
@@ -5255,6 +5555,43 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
                 </p>
               `
             : html`<p className="mt-3 text-sm text-slate-500">No submission link saved yet.</p>`}
+
+          <div className="mt-5 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black text-white">Student Self-Assessment</h2>
+                <p className="text-sm text-slate-400">Student Self-Score: ${formatRubricScore(studentSelfTotal, rubricMaxTotal)}</p>
+              </div>
+              <${Badge} icon=${CheckCircle2}>10 pts</${Badge}>
+            </div>
+            <div className="grid gap-2">
+              ${VIDEO_PRODUCTION_RUBRIC.map(
+                (item) => html`
+                  <label key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[1fr_auto] sm:items-center">
+                    <span className="text-sm font-bold text-slate-200">${item.label}</span>
+                    <span className="flex items-center gap-2 text-sm font-black text-white">
+                      <${TextInput}
+                        type="number"
+                        min="0"
+                        max=${item.maxPoints}
+                        step="1"
+                        value=${selfAssessmentDraft[item.id]}
+                        onInput=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
+                        aria-label=${`${item.label} self-assessment score`}
+                        className="w-16 py-2"
+                      />
+                      <span className="text-slate-400">/ ${item.maxPoints}</span>
+                    </span>
+                  </label>
+                `,
+              )}
+            </div>
+            <div className="mt-3 flex justify-end">
+              <${Button} icon=${Save} type="button" variant="secondary" disabled=${busy} onClick=${() => saveSubmission()}>
+                ${busy ? "Saving..." : "Save Submission"}
+              </${Button}>
+            </div>
+          </div>
         </div>
 
         <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
@@ -5262,8 +5599,8 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
           ${publishedFeedback
             ? html`
                 <p className="mt-2 font-black text-white">
-                  ${valueText(workflow.score)
-                    ? `${workflow.score}/${workflow.maxScore || "100"}${percent === null ? "" : ` - ${percent}% ${workflow.letterGrade || letterGradeForPercent(percent)}`}`
+                  ${hasTeacherRubricGrade
+                    ? `${teacherTotal}/${rubricMaxTotal}${percent === null ? "" : ` - ${percent}% ${workflow.letterGrade || letterGradeForPercent(percent)}`}`
                     : "Reviewed"}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
@@ -5999,6 +6336,9 @@ function VideoProductionApp() {
   const { profiles: studentProfiles, error: profilesError } = useVideoStudentProfiles(
     isVideoTeacher(profile) || isVideoAdmin(profile),
   );
+  const { notes: privateGradeNotes, error: privateNotesError } = useProjectGroupPrivateNotes(
+    isVideoTeacher(profile) || isVideoAdmin(profile),
+  );
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -6162,9 +6502,10 @@ function VideoProductionApp() {
         profile=${profile}
         projects=${projects}
         loading=${projectsLoading || workflowsLoading}
-        error=${projectsError || periodsError || workflowsError}
+        error=${projectsError || periodsError || workflowsError || privateNotesError}
         periods=${periods}
         workflowMap=${projectGroupWorkflows}
+        privateNotesMap=${privateGradeNotes}
         setToast=${setToast}
       />
     `;
