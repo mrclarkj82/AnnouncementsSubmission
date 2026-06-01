@@ -328,6 +328,11 @@ function safeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function valueText(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
 function normalizeEmail(email) {
   return safeText(email).toLowerCase();
 }
@@ -853,6 +858,82 @@ function projectGroupWorkflowId(projectId, periodId, groupId) {
   ].join("__");
 }
 
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function isLikelyGoogleDriveUrl(url) {
+  try {
+    const parsed = new URL(safeText(url));
+    return parsed.protocol === "https:" && parsed.hostname === "drive.google.com";
+  } catch {
+    return false;
+  }
+}
+
+function googleDriveFileId(url) {
+  try {
+    const parsed = new URL(safeText(url));
+    if (parsed.protocol !== "https:" || parsed.hostname !== "drive.google.com") return "";
+    const fileMatch = parsed.pathname.match(/\/file\/d\/([^/]+)/);
+    if (fileMatch?.[1]) return fileMatch[1];
+    return parsed.searchParams.get("id") || "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeGoogleDriveUrl(url) {
+  const value = safeText(url);
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return "";
+    if (parsed.hostname === "drive.google.com") {
+      const fileId = googleDriveFileId(value);
+      if (fileId) return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
+      return parsed.href;
+    }
+    return parsed.href;
+  } catch {
+    return "";
+  }
+}
+
+function getGoogleDrivePreviewUrl(url) {
+  const fileId = googleDriveFileId(url);
+  return fileId ? `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview` : "";
+}
+
+function numericGrade(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function gradePercent(score, maxScore) {
+  const scoreNumber = numericGrade(score);
+  const maxNumber = numericGrade(maxScore);
+  if (scoreNumber === null || !maxNumber || maxNumber <= 0) return null;
+  return Math.round((scoreNumber / maxNumber) * 100);
+}
+
+function letterGradeForPercent(percent) {
+  if (percent === null) return "";
+  if (percent >= 90) return "A";
+  if (percent >= 80) return "B";
+  if (percent >= 70) return "C";
+  if (percent >= 60) return "D";
+  return "F";
+}
+
+function hasSubmittedWorkflow(workflow) {
+  return Boolean(safeText(workflow?.submissionUrl));
+}
+
+function hasWorkflowGrade(workflow) {
+  return Boolean(workflow?.reviewed || workflow?.gradedAt || valueText(workflow?.score));
+}
+
 function defaultGroupWorkflow(project, periodId, group) {
   const checklistItems = checklistTemplateForProject(project);
   const assignedStudentEmails = Array.isArray(group?.assignedStudentEmails)
@@ -873,6 +954,22 @@ function defaultGroupWorkflow(project, periodId, group) {
     checklistItems,
     checklistCompletedCount: 0,
     checklistTotal: checklistItems.length,
+    submissionUrl: "",
+    submissionType: "googleDrive",
+    submittedAt: "",
+    submittedBy: "",
+    submittedByEmail: "",
+    score: "",
+    maxScore: "100",
+    letterGrade: "",
+    feedback: "",
+    privateNotes: "",
+    feedbackPublished: false,
+    reviewed: false,
+    gradedAt: "",
+    gradedBy: "",
+    gradedByEmail: "",
+    unit: getProjectUnit(project),
     updatedAt: "",
     updatedBy: "",
     updatedByEmail: "",
@@ -900,6 +997,22 @@ function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
     checklistItems,
     checklistCompletedCount: progress.completed,
     checklistTotal: progress.total,
+    submissionUrl: normalizeGoogleDriveUrl(workflow?.submissionUrl) || safeText(workflow?.submissionUrl),
+    submissionType: safeText(workflow?.submissionType) || base.submissionType,
+    submittedAt: workflow?.submittedAt || "",
+    submittedBy: safeText(workflow?.submittedBy),
+    submittedByEmail: normalizeEmail(workflow?.submittedByEmail),
+    score: workflow?.score ?? "",
+    maxScore: workflow?.maxScore ?? "100",
+    letterGrade: safeText(workflow?.letterGrade) || letterGradeForPercent(gradePercent(workflow?.score, workflow?.maxScore)),
+    feedback: safeText(workflow?.feedback),
+    privateNotes: safeText(workflow?.privateNotes),
+    feedbackPublished: workflow?.feedbackPublished === true,
+    reviewed: workflow?.reviewed === true,
+    gradedAt: workflow?.gradedAt || "",
+    gradedBy: safeText(workflow?.gradedBy),
+    gradedByEmail: normalizeEmail(workflow?.gradedByEmail),
+    unit: getProjectUnit(workflow?.unit ? workflow : project),
     updatedAt: workflow?.updatedAt || "",
     updatedBy: safeText(workflow?.updatedBy),
     updatedByEmail: normalizeEmail(workflow?.updatedByEmail),
@@ -1598,6 +1711,30 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
     updatedBy: profile.uid || "",
     updatedByEmail: normalizeEmail(profile.email),
   };
+  [
+    "submissionType",
+    "submittedBy",
+    "submittedByEmail",
+    "score",
+    "maxScore",
+    "letterGrade",
+    "feedback",
+    "privateNotes",
+    "gradedBy",
+    "gradedByEmail",
+  ].forEach((field) => {
+    if (hasOwn(patch, field)) payload[field] = safeText(patch[field]);
+  });
+  if (hasOwn(patch, "submissionUrl")) {
+    payload.submissionUrl = normalizeGoogleDriveUrl(patch.submissionUrl) || safeText(patch.submissionUrl);
+  }
+  ["feedbackPublished", "reviewed"].forEach((field) => {
+    if (hasOwn(patch, field)) payload[field] = patch[field] === true;
+  });
+  ["submittedAt", "gradedAt"].forEach((field) => {
+    if (hasOwn(patch, field)) payload[field] = patch[field];
+  });
+  if (hasOwn(patch, "unit")) payload.unit = getProjectUnit({ unit: patch.unit });
 
   await setDoc(doc(db, "projectGroupWorkflows", workflowId), payload, { merge: true });
   await updateDoc(doc(db, "videoProjects", project.id), {
@@ -1820,6 +1957,7 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
     { id: "monitor", label: "Monitor", icon: Monitor, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
     { id: "periods", label: "Periods", icon: LayoutGrid, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
     { id: "projects", label: "Projects", icon: ClipboardCheck, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
+    { id: "grade", label: "Grade", icon: CheckCircle2, show: isVideoTeacher(profile) || isVideoAdmin(profile) },
     { id: "users", label: "Users", icon: Users, show: isVideoAdmin(profile) },
   ].filter((item) => item.show);
 
@@ -2137,6 +2275,404 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
       <div className="mt-3 rounded-xl border border-lens/20 bg-lens/10 p-2.5">
         <p className="text-[11px] font-black uppercase tracking-[0.16em] text-lens">Student rotation</p>
         <p className="mt-1 min-h-8 text-xs font-semibold leading-5 text-slate-100">${rotatingInterest}</p>
+      </div>
+    </article>
+  `;
+}
+
+function GradeDashboard({ projects, loading, error, periods, workflowMap, profile, setToast }) {
+  const activePeriods = getActivePeriods(periods);
+  const [selectedPeriodId, setSelectedPeriodId] = useState("");
+  const [selectedUnit, setSelectedUnit] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const selectedPeriod = activePeriods.find((period) => period.id === selectedPeriodId);
+  const selectedUnitNumber = selectedUnit ? Number(selectedUnit) : null;
+  const activeProjectsForPeriod = selectedPeriodId
+    ? projects
+        .filter((project) => project.status !== "archived")
+        .filter((project) => projectBelongsToPeriod(project, selectedPeriodId))
+    : [];
+  const unitProjects = selectedUnitNumber
+    ? getProjectsForPeriodAndUnit(activeProjectsForPeriod, selectedPeriodId, selectedUnitNumber)
+    : [];
+  const selectedProject = unitProjects.find((project) => project.id === selectedProjectId);
+  const groups = selectedProject ? projectGroupsForPeriod(selectedProject, selectedPeriodId) : [];
+  const gradeItems = selectedProject
+    ? groups.map((group) => ({
+        project: selectedProject,
+        period: selectedPeriod,
+        group,
+        workflow: workflowForContext(selectedProject, selectedPeriodId, group, workflowMap),
+      }))
+    : [];
+  const submittedCount = gradeItems.filter((item) => hasSubmittedWorkflow(item.workflow)).length;
+  const gradedCount = gradeItems.filter((item) => hasWorkflowGrade(item.workflow)).length;
+  const missingCount = gradeItems.length - submittedCount;
+  const filteredItems = gradeItems.filter((item) => {
+    if (statusFilter === "submitted") return hasSubmittedWorkflow(item.workflow);
+    if (statusFilter === "missing") return !hasSubmittedWorkflow(item.workflow);
+    if (statusFilter === "graded") return hasWorkflowGrade(item.workflow);
+    if (statusFilter === "ungraded") return !hasWorkflowGrade(item.workflow);
+    return true;
+  });
+  const unitProjectIds = unitProjects.map((project) => project.id).join("|");
+
+  useEffect(() => {
+    setSelectedUnit("");
+    setSelectedProjectId("");
+    setStatusFilter("all");
+  }, [selectedPeriodId]);
+
+  useEffect(() => {
+    setSelectedProjectId("");
+    setStatusFilter("all");
+  }, [selectedUnit]);
+
+  useEffect(() => {
+    if (selectedProjectId && !unitProjects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId("");
+    }
+  }, [unitProjectIds, selectedProjectId]);
+
+  return html`
+    <section className="space-y-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Assessment</p>
+          <h1 className="mt-1 text-3xl font-black text-white">Grade</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+            Grade a full period's group submissions by period, unit, and assignment.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <${Badge} icon=${Users}>${gradeItems.length} groups</${Badge}>
+          <${Badge} icon=${CheckCircle2}>${gradedCount} graded</${Badge}>
+          <${Badge} icon=${FileText}>${submittedCount} submitted</${Badge}>
+        </div>
+      </div>
+
+      ${error ? html`<p className="rounded-xl bg-alert/10 p-3 text-sm text-red-200">${error}</p>` : null}
+
+      <div className="vp-panel rounded-3xl p-4">
+        <div className="grid gap-3 lg:grid-cols-[1fr_0.55fr_1.2fr]">
+          <label className="grid gap-2 text-sm font-bold text-slate-300">
+            Period
+            <${Select}
+              value=${selectedPeriodId}
+              onChange=${(event) => setSelectedPeriodId(event.currentTarget.value)}
+            >
+              <option value="">Select Period</option>
+              ${activePeriods.map(
+                (period) => html`
+                  <option key=${period.id} value=${period.id}>
+                    ${period.periodName}${period.courseName ? ` - ${period.courseName}` : ""}
+                  </option>
+                `,
+              )}
+            </${Select}>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-300">
+            Unit
+            <${Select}
+              value=${selectedUnit}
+              disabled=${!selectedPeriodId}
+              onChange=${(event) => setSelectedUnit(event.currentTarget.value)}
+            >
+              <option value="">Select Unit</option>
+              ${PROJECT_UNITS.map((unit) => html`<option key=${unit} value=${unit}>Unit ${unit}</option>`)}
+            </${Select}>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-300">
+            Assignment / Project
+            <${Select}
+              value=${selectedProjectId}
+              disabled=${!selectedPeriodId || !selectedUnit || unitProjects.length === 0}
+              onChange=${(event) => setSelectedProjectId(event.currentTarget.value)}
+            >
+              <option value="">
+                ${!selectedPeriodId || !selectedUnit
+                  ? "Select period and unit first"
+                  : unitProjects.length
+                    ? "Select assignment/project"
+                    : "No projects in this unit."}
+              </option>
+              ${unitProjects.map((project) => html`<option key=${project.id} value=${project.id}>${project.title}</option>`)}
+            </${Select}>
+          </label>
+        </div>
+      </div>
+
+      ${loading
+        ? html`<${EmptyState} icon=${Activity} title="Loading projects" />`
+        : !selectedPeriodId
+          ? html`<${EmptyState} icon=${LayoutGrid} title="Select a period to begin grading." />`
+          : !selectedUnit
+            ? html`<${EmptyState} icon=${BookOpen} title="Select a unit." />`
+            : unitProjects.length === 0
+              ? html`<${EmptyState} icon=${Monitor} title="No projects found for this period and unit." />`
+              : !selectedProject
+                ? html`<${EmptyState} icon=${ClipboardCheck} title="Select an assignment/project to grade." />`
+                : groups.length === 0
+                  ? html`<${EmptyState} icon=${Users} title="No groups have been created for this project in this period." />`
+                  : html`
+                      <section className="space-y-4">
+                        <div className="vp-panel rounded-3xl p-4">
+                          <div className="grid gap-3 md:grid-cols-4">
+                            <${GradeSummaryTile} label="Total groups" value=${gradeItems.length} />
+                            <${GradeSummaryTile} label="Submitted" value=${submittedCount} />
+                            <${GradeSummaryTile} label="Missing" value=${missingCount} />
+                            <${GradeSummaryTile} label="Graded" value=${gradedCount} />
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            ${["all", "submitted", "missing", "graded", "ungraded"].map(
+                              (filter) => html`
+                                <button
+                                  key=${filter}
+                                  type="button"
+                                  className=${classNames(
+                                    "rounded-full px-3 py-1.5 text-xs font-black capitalize ring-1 transition",
+                                    statusFilter === filter
+                                      ? "bg-lens text-slate-950 ring-lens"
+                                      : "bg-slate-950/45 text-slate-300 ring-slate-700 hover:bg-slate-800",
+                                  )}
+                                  onClick=${() => setStatusFilter(filter)}
+                                >
+                                  ${filter}
+                                </button>
+                              `,
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-3xl border border-lens/20 bg-lens/10 p-4">
+                          <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Review Studio coming later</p>
+                          <p className="mt-2 text-sm leading-6 text-slate-200">
+                            Timestamped comments, browser markup, and voiceover feedback can be added as app data later. Google Drive previews are cross-origin, so this app cannot draw inside or alter the Drive video player directly.
+                          </p>
+                        </div>
+                        <div className="grid gap-4">
+                          ${filteredItems.length
+                            ? filteredItems.map(
+                                (item) => html`
+                                  <${GradeSubmissionCard}
+                                    key=${item.workflow.id}
+                                    project=${item.project}
+                                    period=${item.period}
+                                    group=${item.group}
+                                    workflow=${item.workflow}
+                                    profile=${profile}
+                                    setToast=${setToast}
+                                  />
+                                `,
+                              )
+                            : html`<${EmptyState} icon=${FileText} title="No submissions match this filter." />`}
+                        </div>
+                      </section>
+                    `}
+    </section>
+  `;
+}
+
+function GradeSummaryTile({ label, value }) {
+  return html`
+    <div className="rounded-2xl bg-slate-950/42 p-3 ring-1 ring-slate-700/70">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">${label}</p>
+      <p className="mt-1 text-2xl font-black text-white">${value}</p>
+    </div>
+  `;
+}
+
+function GradeSubmissionCard({ project, period, group, workflow, profile, setToast }) {
+  const [draft, setDraft] = useState(() => ({
+    score: valueText(workflow.score),
+    maxScore: valueText(workflow.maxScore || "100"),
+    feedback: safeText(workflow.feedback),
+    privateNotes: safeText(workflow.privateNotes),
+    feedbackPublished: workflow.feedbackPublished === true,
+  }));
+  const [busy, setBusy] = useState(false);
+  const previewUrl = getGoogleDrivePreviewUrl(workflow.submissionUrl);
+  const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
+  const percent = gradePercent(draft.score, draft.maxScore);
+  const letterGrade = letterGradeForPercent(percent);
+  const submitted = hasSubmittedWorkflow(workflow);
+  const graded = hasWorkflowGrade(workflow);
+
+  useEffect(() => {
+    setDraft({
+      score: valueText(workflow.score),
+      maxScore: valueText(workflow.maxScore || "100"),
+      feedback: safeText(workflow.feedback),
+      privateNotes: safeText(workflow.privateNotes),
+      feedbackPublished: workflow.feedbackPublished === true,
+    });
+  }, [workflow.id, workflow.score, workflow.maxScore, workflow.feedback, workflow.privateNotes, workflow.feedbackPublished]);
+
+  const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
+
+  const saveGrade = async () => {
+    setBusy(true);
+    try {
+      await saveGroupWorkflow(
+        project,
+        period.id,
+        group,
+        workflow,
+        profile,
+        {
+          score: safeText(draft.score),
+          maxScore: safeText(draft.maxScore || "100"),
+          letterGrade,
+          feedback: safeText(draft.feedback),
+          privateNotes: safeText(draft.privateNotes),
+          feedbackPublished: draft.feedbackPublished === true,
+          reviewed: true,
+          gradedAt: serverTimestamp(),
+          gradedBy: profile.uid || "",
+          gradedByEmail: normalizeEmail(profile.email),
+          unit: getProjectUnit(project),
+        },
+        `Saved grade for ${group.name}`,
+      );
+      setToast(`Grade saved for ${group.name}`);
+    } catch (gradeError) {
+      setToast(gradeError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <article className="vp-panel rounded-3xl p-4 sm:p-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">
+            ${period?.periodName || workflow.periodName} - ${projectUnitLabel(project)}
+          </p>
+          <h2 className="mt-1 text-xl font-black text-white">${group.name}</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-400">
+            ${group.assignedStudentEmails.length
+              ? group.assignedStudentEmails.map(titleFromEmail).join(", ")
+              : "No students assigned"}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <${Badge} icon=${submitted ? FileText : AlertTriangle}>${submitted ? "Submitted" : "Missing submission"}</${Badge}>
+          <${Badge} icon=${graded ? CheckCircle2 : Circle}>${graded ? "Graded" : "Ungraded"}</${Badge}>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.85fr]">
+        <section className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Submission</p>
+              <p className="mt-1 text-sm text-slate-400">
+                ${workflow.submittedAt ? `Last submitted ${timestampLabel(workflow.submittedAt)}` : "No submission timestamp yet"}
+              </p>
+            </div>
+            ${openUrl
+              ? html`
+                  <a
+                    className="inline-flex min-h-10 items-center justify-center rounded-xl bg-slate-800 px-3 py-2 text-sm font-black text-white ring-1 ring-slate-700 hover:bg-slate-700"
+                    href=${openUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in Drive
+                  </a>
+                `
+              : null}
+          </div>
+          ${previewUrl
+            ? html`
+                <iframe
+                  className="h-80 w-full rounded-2xl border border-slate-700/70 bg-black"
+                  src=${previewUrl}
+                  allow="autoplay; fullscreen"
+                  allowFullScreen
+                  loading="lazy"
+                  title=${`${group.name} Google Drive preview`}
+                ></iframe>
+              `
+            : html`
+                <div className="grid min-h-52 place-items-center rounded-2xl border border-dashed border-slate-700/80 bg-slate-950/45 p-6 text-center">
+                  <div>
+                    <p className="font-black text-white">${submitted ? "Preview unavailable. Open in Drive." : "Missing submission."}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      ${submitted
+                        ? "This link cannot be safely embedded here, but it can still be opened externally."
+                        : "A group member can paste a Google Drive link from the student filming workflow."}
+                    </p>
+                  </div>
+                </div>
+              `}
+        </section>
+
+        <section className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Grade</p>
+              <p className="mt-1 font-black text-white">
+                ${percent === null ? "No score yet" : `${percent}%${letterGrade ? ` - ${letterGrade}` : ""}`}
+              </p>
+            </div>
+            <${Badge} icon=${workflow.reviewed ? CheckCircle2 : Circle}>${workflow.reviewed ? "Reviewed" : "Needs review"}</${Badge}>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm font-bold text-slate-300">
+              Score
+              <${TextInput}
+                type="number"
+                min="0"
+                value=${draft.score}
+                onInput=${(event) => updateDraft("score", event.currentTarget.value)}
+                placeholder="92"
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-bold text-slate-300">
+              Max score
+              <${TextInput}
+                type="number"
+                min="1"
+                value=${draft.maxScore}
+                onInput=${(event) => updateDraft("maxScore", event.currentTarget.value)}
+                placeholder="100"
+              />
+            </label>
+          </div>
+          <label className="mt-3 grid gap-1 text-sm font-bold text-slate-300">
+            Teacher feedback
+            <${Textarea}
+              value=${draft.feedback}
+              onInput=${(event) => updateDraft("feedback", event.currentTarget.value)}
+              placeholder="What the group did well and what to improve next time."
+              className="min-h-28"
+            />
+          </label>
+          <label className="mt-3 grid gap-1 text-sm font-bold text-slate-300">
+            Private notes
+            <${Textarea}
+              value=${draft.privateNotes}
+              onInput=${(event) => updateDraft("privateNotes", event.currentTarget.value)}
+              placeholder="Teacher-only notes. Students will not see this."
+              className="min-h-24"
+            />
+          </label>
+          <label className="mt-3 flex items-center gap-2 text-sm font-bold text-slate-300">
+            <input
+              type="checkbox"
+              checked=${draft.feedbackPublished}
+              onChange=${(event) => updateDraft("feedbackPublished", event.currentTarget.checked)}
+            />
+            Publish feedback to this group
+          </label>
+          <div className="mt-4 flex justify-end">
+            <${Button} icon=${Save} type="button" disabled=${busy} onClick=${saveGrade}>
+              ${busy ? "Saving..." : "Save Grade"}
+            </${Button}>
+          </div>
+        </section>
       </div>
     </article>
   `;
@@ -4590,6 +5126,15 @@ function FilmingWorkspace({
           `
         : null}
 
+      <${StudentSubmissionPanel}
+        project=${project}
+        periodId=${workflowContext.periodId}
+        group=${activeGroup}
+        workflow=${activeWorkflow}
+        profile=${profile}
+        setToast=${setToast}
+      />
+
       <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <${ProductionChecklist} items=${activeWorkflow.checklistItems} onToggle=${toggleChecklist} />
         <${ScriptWritingPanel}
@@ -4630,6 +5175,109 @@ function FilmingWorkspace({
           `
         : null}
     </div>
+  `;
+}
+
+function StudentSubmissionPanel({ project, periodId, group, workflow, profile, setToast }) {
+  const [submissionDraft, setSubmissionDraft] = useState(() => safeText(workflow.submissionUrl));
+  const [busy, setBusy] = useState(false);
+  const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
+  const percent = gradePercent(workflow.score, workflow.maxScore);
+  const publishedFeedback = workflow.feedbackPublished === true;
+
+  useEffect(() => {
+    setSubmissionDraft(safeText(workflow.submissionUrl));
+  }, [workflow.id, workflow.submissionUrl]);
+
+  const saveSubmission = async (event) => {
+    event.preventDefault();
+    const normalizedUrl = normalizeGoogleDriveUrl(submissionDraft);
+    if (!normalizedUrl || !isLikelyGoogleDriveUrl(normalizedUrl)) {
+      setToast("Paste a valid Google Drive link before submitting.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await saveGroupWorkflow(
+        project,
+        periodId,
+        group,
+        workflow,
+        profile,
+        {
+          submissionUrl: normalizedUrl,
+          submissionType: "googleDrive",
+          submittedAt: serverTimestamp(),
+          submittedBy: profile.uid || "",
+          submittedByEmail: normalizeEmail(profile.email),
+          unit: getProjectUnit(project),
+        },
+        `Submitted ${group.name} Drive link`,
+      );
+      setToast("Submission link saved");
+    } catch (submissionError) {
+      setToast(submissionError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <section className="vp-panel rounded-3xl p-4">
+      <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
+        <div>
+          <div className="mb-3">
+            <h2 className="text-lg font-black text-white">Final Submission</h2>
+            <p className="text-sm leading-6 text-slate-400">
+              Paste the group's Google Drive video link here. The teacher can preview it in Grade.
+            </p>
+          </div>
+          <form onSubmit=${saveSubmission} className="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <${TextInput}
+              value=${submissionDraft}
+              onInput=${(event) => setSubmissionDraft(event.currentTarget.value)}
+              placeholder="https://drive.google.com/file/d/..."
+              aria-label="Google Drive submission link"
+            />
+            <${Button} icon=${Save} type="submit" disabled=${busy}>
+              ${busy ? "Saving..." : "Save Link"}
+            </${Button}>
+          </form>
+          ${openUrl
+            ? html`
+                <p className="mt-3 text-sm text-slate-400">
+                  Current submission:
+                  <a className="font-black text-lens hover:text-sky-200" href=${openUrl} target="_blank" rel="noreferrer">
+                    Open in Drive
+                  </a>
+                  ${workflow.submittedAt ? ` - ${timestampLabel(workflow.submittedAt)}` : ""}
+                </p>
+              `
+            : html`<p className="mt-3 text-sm text-slate-500">No submission link saved yet.</p>`}
+        </div>
+
+        <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Teacher Feedback</p>
+          ${publishedFeedback
+            ? html`
+                <p className="mt-2 font-black text-white">
+                  ${valueText(workflow.score)
+                    ? `${workflow.score}/${workflow.maxScore || "100"}${percent === null ? "" : ` - ${percent}% ${workflow.letterGrade || letterGradeForPercent(percent)}`}`
+                    : "Reviewed"}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  ${safeText(workflow.feedback) || "No written feedback yet."}
+                </p>
+              `
+            : html`
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  Feedback will appear here after your teacher publishes it.
+                </p>
+              `}
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -5506,6 +6154,18 @@ function VideoProductionApp() {
         }}
         periods=${periods}
         enrollments=${enrollments}
+      />
+    `;
+  } else if (activeView === "grade" && (isVideoTeacher(profile) || isVideoAdmin(profile))) {
+    content = html`
+      <${GradeDashboard}
+        profile=${profile}
+        projects=${projects}
+        loading=${projectsLoading || workflowsLoading}
+        error=${projectsError || periodsError || workflowsError}
+        periods=${periods}
+        workflowMap=${projectGroupWorkflows}
+        setToast=${setToast}
       />
     `;
   } else if (activeView === "users" && isVideoAdmin(profile)) {

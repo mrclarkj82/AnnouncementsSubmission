@@ -326,6 +326,22 @@ service cloud.firestore {
           "checklistItems",
           "checklistCompletedCount",
           "checklistTotal",
+          "submissionUrl",
+          "submissionType",
+          "submittedAt",
+          "submittedBy",
+          "submittedByEmail",
+          "score",
+          "maxScore",
+          "letterGrade",
+          "feedback",
+          "privateNotes",
+          "feedbackPublished",
+          "reviewed",
+          "gradedAt",
+          "gradedBy",
+          "gradedByEmail",
+          "unit",
           "updatedAt",
           "updatedBy",
           "updatedByEmail"
@@ -344,9 +360,57 @@ service cloud.firestore {
         && request.resource.data.checklistItems is list
         && request.resource.data.checklistCompletedCount is number
         && request.resource.data.checklistTotal is number
+        && (!request.resource.data.keys().hasAny(["submissionUrl"]) || request.resource.data.submissionUrl is string)
+        && (!request.resource.data.keys().hasAny(["submissionType"]) || request.resource.data.submissionType is string)
+        && (!request.resource.data.keys().hasAny(["submittedBy"]) || request.resource.data.submittedBy is string)
+        && (!request.resource.data.keys().hasAny(["submittedByEmail"]) || request.resource.data.submittedByEmail is string)
+        && (!request.resource.data.keys().hasAny(["score"]) || request.resource.data.score is string || request.resource.data.score is number)
+        && (!request.resource.data.keys().hasAny(["maxScore"]) || request.resource.data.maxScore is string || request.resource.data.maxScore is number)
+        && (!request.resource.data.keys().hasAny(["letterGrade"]) || request.resource.data.letterGrade is string)
+        && (!request.resource.data.keys().hasAny(["feedback"]) || request.resource.data.feedback is string)
+        && (!request.resource.data.keys().hasAny(["privateNotes"]) || request.resource.data.privateNotes is string)
+        && (!request.resource.data.keys().hasAny(["feedbackPublished"]) || request.resource.data.feedbackPublished is bool)
+        && (!request.resource.data.keys().hasAny(["reviewed"]) || request.resource.data.reviewed is bool)
+        && (!request.resource.data.keys().hasAny(["gradedBy"]) || request.resource.data.gradedBy is string)
+        && (!request.resource.data.keys().hasAny(["gradedByEmail"]) || request.resource.data.gradedByEmail is string)
+        && (!request.resource.data.keys().hasAny(["unit"]) || request.resource.data.unit is number)
         && request.resource.data.updatedBy is string
         && request.resource.data.updatedByEmail is string
         && request.resource.data.updatedByEmail == request.resource.data.updatedByEmail.lower();
+    }
+
+    function studentWorkflowCreateIsSafe() {
+      return !request.resource.data.keys().hasAny([
+        "score",
+        "maxScore",
+        "letterGrade",
+        "feedback",
+        "privateNotes",
+        "feedbackPublished",
+        "reviewed",
+        "gradedAt",
+        "gradedBy",
+        "gradedByEmail"
+      ]);
+    }
+
+    function studentWorkflowUpdateIsSafe() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        "filmingStatus",
+        "currentTask",
+        "checklistItems",
+        "checklistCompletedCount",
+        "checklistTotal",
+        "submissionUrl",
+        "submissionType",
+        "submittedAt",
+        "submittedBy",
+        "submittedByEmail",
+        "unit",
+        "updatedAt",
+        "updatedBy",
+        "updatedByEmail"
+      ]);
     }
 
     function validPeriod(periodId) {
@@ -862,28 +926,28 @@ service cloud.firestore {
         );
       allow list: if isVideoAdmin() || isVideoTeacher();
       allow create: if validProjectGroupWorkflow(workflowId)
-        && (
-          canManageVideoProjectId(request.resource.data.projectId)
-          || (
-            isVideoStudent()
-            && signedInEmail() in request.resource.data.assignedStudentEmails
-            && canReadVideoProjectId(request.resource.data.projectId)
-          )
-        );
+        && canManageVideoProjectId(request.resource.data.projectId);
+      allow create: if validProjectGroupWorkflow(workflowId)
+        && studentWorkflowCreateIsSafe()
+        && isVideoStudent()
+        && signedInEmail() in request.resource.data.assignedStudentEmails
+        && canReadVideoProjectId(request.resource.data.projectId);
       allow update: if validProjectGroupWorkflow(workflowId)
         && request.resource.data.workflowId == resource.data.workflowId
         && request.resource.data.projectId == resource.data.projectId
         && request.resource.data.periodId == resource.data.periodId
         && request.resource.data.groupId == resource.data.groupId
-        && (
-          canManageVideoProjectId(resource.data.projectId)
-          || (
-            isVideoStudent()
-            && signedInEmail() in resource.data.assignedStudentEmails
-            && signedInEmail() in request.resource.data.assignedStudentEmails
-            && canReadVideoProjectId(resource.data.projectId)
-          )
-        );
+        && canManageVideoProjectId(resource.data.projectId);
+      allow update: if validProjectGroupWorkflow(workflowId)
+        && studentWorkflowUpdateIsSafe()
+        && request.resource.data.workflowId == resource.data.workflowId
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.periodId == resource.data.periodId
+        && request.resource.data.groupId == resource.data.groupId
+        && isVideoStudent()
+        && signedInEmail() in resource.data.assignedStudentEmails
+        && signedInEmail() in request.resource.data.assignedStudentEmails
+        && canReadVideoProjectId(resource.data.projectId);
       allow delete: if isVideoAdmin();
     }
 
