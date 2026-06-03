@@ -44,6 +44,10 @@ The Video Production Grade tab lets teachers/admins grade by Period -> Unit -> A
 
 Student submissions now include Planning / Pre-Production writing plus a 7-category, 10-point student self-assessment rubric. The Grade tab shows the student self-score with an expandable category breakdown, while teachers use the same 7-category rubric for the official group-scoped grade by project, period, and group. Private teacher notes are stored separately from student-readable workflow data.
 
-## Future Review Studio
+## Video Review Studio
 
-Google Drive preview iframes are cross-origin, so the app cannot reliably draw inside, control, or modify the Drive video player. A future Review Studio should store timestamped comments, optional drawing data, and optional voiceover feedback as app data alongside the submission. For direct browser-playable video URLs, a future implementation could use an HTML5 video element with a canvas overlay and MediaRecorder, but recorded feedback storage needs a safe backend decision first.
+The Grade tab now keeps the official Teacher Rubric and the Video Review Studio side by side. The rubric remains the official score stored in `projectGroupWorkflows`; Review Studio stores detailed video-specific corrections separately in `videoReviews` by project, period, and group.
+
+Teachers/admins can open Review Studio from a group submission card, add timestamped correction notes, draw app-owned markup overlays above the Drive preview, and publish those corrections to the student group. Published review notes appear in the student filming workflow as "Teacher Video Review" without changing the official grade or rubric feedback.
+
+Google Drive preview iframes are cross-origin, so the app cannot reliably control the Drive timeline or modify the Drive player itself. Review timestamps are entered manually and drawing markup is stored as app data. Recording support needs Firebase Storage rules/configuration before WebM feedback recordings can be saved safely; the app does not store recording blobs in Firestore.

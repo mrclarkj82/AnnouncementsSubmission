@@ -526,6 +526,46 @@ service cloud.firestore {
         && request.resource.data.updatedByEmail == request.resource.data.updatedByEmail.lower();
     }
 
+    function validVideoReview(reviewId) {
+      return request.resource.data.keys().hasOnly([
+          "reviewId",
+          "projectId",
+          "periodId",
+          "groupId",
+          "unit",
+          "projectTitle",
+          "periodName",
+          "groupName",
+          "assignedStudentEmails",
+          "submissionUrl",
+          "notes",
+          "recordings",
+          "published",
+          "publishedAt",
+          "publishedBy",
+          "updatedAt",
+          "updatedBy",
+          "updatedByEmail"
+        ])
+        && request.resource.data.reviewId == reviewId
+        && request.resource.data.projectId is string
+        && request.resource.data.periodId is string
+        && request.resource.data.groupId is string
+        && request.resource.data.unit is number
+        && request.resource.data.projectTitle is string
+        && request.resource.data.periodName is string
+        && request.resource.data.groupName is string
+        && request.resource.data.assignedStudentEmails is list
+        && request.resource.data.submissionUrl is string
+        && request.resource.data.notes is list
+        && request.resource.data.recordings is list
+        && request.resource.data.published is bool
+        && (!request.resource.data.keys().hasAny(["publishedBy"]) || request.resource.data.publishedBy is string)
+        && request.resource.data.updatedBy is string
+        && request.resource.data.updatedByEmail is string
+        && request.resource.data.updatedByEmail == request.resource.data.updatedByEmail.lower();
+    }
+
     function validPeriod(periodId) {
       return request.resource.data.keys().hasOnly([
           "periodId",
@@ -1073,6 +1113,25 @@ service cloud.firestore {
     match /projectGroupPrivateNotes/{workflowId} {
       allow get, list: if isVideoAdmin() || isVideoTeacher();
       allow create, update: if validProjectGroupPrivateNote(workflowId)
+        && canManageVideoProjectId(request.resource.data.projectId);
+      allow delete: if isVideoAdmin()
+        || (
+          resource.data.projectId is string
+          && canManageVideoProjectId(resource.data.projectId)
+        );
+    }
+
+    match /videoReviews/{reviewId} {
+      allow get: if isVideoAdmin()
+        || isVideoTeacher()
+        || (
+          isVideoStudent()
+          && resource.data.published == true
+          && signedInEmail() in resource.data.assignedStudentEmails
+          && canReadVideoProjectId(resource.data.projectId)
+        );
+      allow list: if isVideoAdmin() || isVideoTeacher();
+      allow create, update: if validVideoReview(reviewId)
         && canManageVideoProjectId(request.resource.data.projectId);
       allow delete: if isVideoAdmin()
         || (

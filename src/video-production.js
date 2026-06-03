@@ -912,6 +912,10 @@ function projectGroupWorkflowId(projectId, periodId, groupId) {
   ].join("__");
 }
 
+function videoReviewDocumentId(projectId, periodId, groupId) {
+  return projectGroupWorkflowId(projectId, periodId, groupId);
+}
+
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
@@ -1029,6 +1033,155 @@ function calculateRubricTotal(scores) {
 
 function formatRubricScore(total, maxTotal = getRubricMaxTotal()) {
   return `${clampRubricScore(total, maxTotal)}/${maxTotal}`;
+}
+
+function parseTimestampToSeconds(value) {
+  const text = safeText(value);
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return Number(text);
+  const match = text.match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function formatSecondsAsTimestamp(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "";
+  const whole = Math.round(value);
+  const minutes = Math.floor(whole / 60);
+  const remainingSeconds = String(whole % 60).padStart(2, "0");
+  return `${minutes}:${remainingSeconds}`;
+}
+
+function normalizeTimestampLabel(value) {
+  const seconds = parseTimestampToSeconds(value);
+  if (seconds === null) return safeText(value);
+  return formatSecondsAsTimestamp(seconds);
+}
+
+function normalizeDrawingStrokes(strokes) {
+  if (!Array.isArray(strokes)) return [];
+  return strokes
+    .map((stroke) => ({
+      points: Array.isArray(stroke?.points)
+        ? stroke.points
+            .map((point) => ({
+              x: Math.min(1, Math.max(0, Number(point?.x))),
+              y: Math.min(1, Math.max(0, Number(point?.y))),
+            }))
+            .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+            .slice(0, 600)
+        : [],
+    }))
+    .filter((stroke) => stroke.points.length > 0)
+    .slice(0, 40);
+}
+
+function normalizeReviewNote(note) {
+  const timeSeconds = Number(note?.timeSeconds);
+  const normalizedSeconds = Number.isFinite(timeSeconds) && timeSeconds >= 0 ? timeSeconds : null;
+  const drawingStrokes = normalizeDrawingStrokes(note?.drawing?.strokes);
+  return {
+    id: safeText(note?.id) || makeId("note"),
+    timestampLabel:
+      safeText(note?.timestampLabel) ||
+      (normalizedSeconds === null ? "" : formatSecondsAsTimestamp(normalizedSeconds)),
+    timeSeconds: normalizedSeconds,
+    text: safeText(note?.text),
+    drawing: drawingStrokes.length ? { type: "freehand", strokes: drawingStrokes } : null,
+    createdAt: note?.createdAt || "",
+    createdBy: safeText(note?.createdBy),
+    updatedAt: note?.updatedAt || "",
+  };
+}
+
+function sortReviewNotes(notes) {
+  return (Array.isArray(notes) ? notes : [])
+    .map(normalizeReviewNote)
+    .filter((note) => note.text)
+    .sort((a, b) => {
+      if (a.timeSeconds !== null && b.timeSeconds !== null) return a.timeSeconds - b.timeSeconds;
+      if (a.timeSeconds !== null) return -1;
+      if (b.timeSeconds !== null) return 1;
+      return safeText(a.timestampLabel).localeCompare(safeText(b.timestampLabel));
+    });
+}
+
+function normalizeReviewRecording(recording) {
+  return {
+    id: safeText(recording?.id) || makeId("recording"),
+    storagePath: safeText(recording?.storagePath),
+    downloadUrl: safeText(recording?.downloadUrl),
+    fileName: safeText(recording?.fileName),
+    contentType: safeText(recording?.contentType) || "video/webm",
+    createdAt: recording?.createdAt || "",
+    createdBy: safeText(recording?.createdBy),
+    durationSeconds: Number(recording?.durationSeconds) || 0,
+    published: recording?.published === true,
+  };
+}
+
+function defaultVideoReview(project, periodId, group, workflow = null) {
+  const reviewId = videoReviewDocumentId(project?.id, periodId, group?.id);
+  const assignedStudentEmails = Array.isArray(group?.assignedStudentEmails)
+    ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+    : [];
+  return {
+    id: reviewId,
+    reviewId,
+    projectId: safeText(project?.id),
+    periodId: safeText(periodId),
+    groupId: safeText(group?.id),
+    unit: getProjectUnit(project),
+    projectTitle: safeText(project?.title),
+    periodName: safeText(workflow?.periodName || project?.periodName),
+    groupName: safeText(group?.name) || "Group",
+    assignedStudentEmails,
+    submissionUrl: normalizeGoogleDriveUrl(workflow?.submissionUrl) || safeText(workflow?.submissionUrl),
+    notes: [],
+    recordings: [],
+    published: false,
+    publishedAt: "",
+    publishedBy: "",
+    updatedAt: "",
+    updatedBy: "",
+    updatedByEmail: "",
+  };
+}
+
+function normalizeVideoReview(project, periodId, group, workflow, review = null) {
+  const base = defaultVideoReview(project, periodId, group, workflow);
+  return {
+    ...base,
+    ...(review || {}),
+    id: review?.id || base.id,
+    reviewId: review?.reviewId || base.reviewId,
+    projectId: safeText(review?.projectId || base.projectId),
+    periodId: safeText(review?.periodId || base.periodId),
+    groupId: safeText(review?.groupId || base.groupId),
+    unit: Number(review?.unit) || base.unit,
+    projectTitle: safeText(project?.title || review?.projectTitle || base.projectTitle),
+    periodName: safeText(review?.periodName || base.periodName),
+    groupName: safeText(group?.name || review?.groupName || base.groupName),
+    assignedStudentEmails: base.assignedStudentEmails,
+    submissionUrl: normalizeGoogleDriveUrl(workflow?.submissionUrl || review?.submissionUrl) || safeText(review?.submissionUrl),
+    notes: sortReviewNotes(review?.notes),
+    recordings: Array.isArray(review?.recordings) ? review.recordings.map(normalizeReviewRecording) : [],
+    published: review?.published === true,
+    publishedAt: review?.publishedAt || "",
+    publishedBy: safeText(review?.publishedBy),
+    updatedAt: review?.updatedAt || "",
+    updatedBy: safeText(review?.updatedBy),
+    updatedByEmail: normalizeEmail(review?.updatedByEmail),
+  };
+}
+
+function videoReviewStatus(review) {
+  if (!review || (!review.notes?.length && !review.recordings?.length && !review.published)) {
+    return "No review started";
+  }
+  if (review.published) return review.recordings?.length ? "Published review + recording" : "Published review";
+  return review.recordings?.length ? "Draft review + recording" : "Draft review";
 }
 
 function numericGrade(value) {
@@ -1750,6 +1903,93 @@ function useProjectGroupWorkflows(profile, projects = []) {
   return { workflows, loading, error };
 }
 
+function useVideoReviews(profile, projects = []) {
+  const [reviews, setReviews] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const projectSignature = JSON.stringify(
+    projects.map((project) => ({
+      id: project.id,
+      periodId: project.periodId,
+      periodIds: project.periodIds,
+      groups: project.groups,
+      groupsByPeriod: project.groupsByPeriod,
+    })),
+  );
+
+  useEffect(() => {
+    if (!hasVideoAccess(profile)) {
+      setReviews({});
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    setLoading(true);
+    const reviewsRef = collection(db, "videoReviews");
+
+    if (isVideoAdmin(profile) || isVideoTeacher(profile)) {
+      const unsubscribe = onSnapshot(
+        reviewsRef,
+        (snapshot) => {
+          const nextReviews = {};
+          snapshot.docs.forEach((item) => {
+            nextReviews[item.id] = { id: item.id, ...item.data() };
+          });
+          setReviews(nextReviews);
+          setError("");
+          setLoading(false);
+        },
+        (snapshotError) => {
+          setError(snapshotError.message);
+          setLoading(false);
+        },
+      );
+
+      return unsubscribe;
+    }
+
+    const studentEmail = normalizeEmail(profile?.email);
+    const contexts = projects.flatMap((project) =>
+      workflowContextsForProject(project).filter((context) =>
+        context.group.assignedStudentEmails.map(normalizeEmail).includes(studentEmail),
+      ),
+    );
+
+    if (!contexts.length) {
+      setReviews({});
+      setError("");
+      setLoading(false);
+      return undefined;
+    }
+
+    const reviewBuckets = new Map();
+    const updateStudentReviews = () => {
+      setReviews(Object.fromEntries(reviewBuckets.entries()));
+      setError("");
+      setLoading(false);
+    };
+    const unsubscribes = contexts.map((context) =>
+      onSnapshot(
+        doc(db, "videoReviews", videoReviewDocumentId(context.project.id, context.periodId, context.group.id)),
+        (snapshot) => {
+          if (snapshot.exists()) reviewBuckets.set(snapshot.id, { id: snapshot.id, ...snapshot.data() });
+          else reviewBuckets.delete(snapshot.id);
+          updateStudentReviews();
+        },
+        (snapshotError) => {
+          setError(snapshotError.message);
+          setLoading(false);
+        },
+      ),
+    );
+
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [profile?.email, profile?.role, projectSignature]);
+
+  return { reviews, loading, error };
+}
+
 function useVideoUsers(enabled) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1956,6 +2196,43 @@ async function saveProjectGroupPrivateNote(project, periodId, group, profile, pr
     },
     { merge: true },
   );
+}
+
+async function saveVideoReview(project, period, group, workflow, currentReview, profile, patch, action) {
+  const reviewId = videoReviewDocumentId(project.id, period.id, group.id);
+  const baseReview = normalizeVideoReview(project, period.id, group, workflow, currentReview);
+  const nextNotes = hasOwn(patch, "notes") ? sortReviewNotes(patch.notes) : baseReview.notes;
+  const nextRecordings = hasOwn(patch, "recordings")
+    ? patch.recordings.map(normalizeReviewRecording)
+    : baseReview.recordings;
+  const payload = {
+    reviewId,
+    projectId: project.id,
+    periodId: period.id,
+    groupId: group.id,
+    unit: getProjectUnit(project),
+    projectTitle: project.title,
+    periodName: period.periodName || workflow.periodName || project.periodName || "",
+    groupName: group.name,
+    assignedStudentEmails: group.assignedStudentEmails.map(normalizeEmail).filter(Boolean),
+    submissionUrl: normalizeGoogleDriveUrl(workflow.submissionUrl) || safeText(workflow.submissionUrl),
+    notes: nextNotes,
+    recordings: nextRecordings,
+    published: hasOwn(patch, "published") ? patch.published === true : baseReview.published,
+    publishedAt: hasOwn(patch, "publishedAt") ? patch.publishedAt : baseReview.publishedAt,
+    publishedBy: hasOwn(patch, "publishedBy") ? safeText(patch.publishedBy) : baseReview.publishedBy,
+    updatedAt: serverTimestamp(),
+    updatedBy: profile.uid || "",
+    updatedByEmail: normalizeEmail(profile.email),
+  };
+
+  await setDoc(doc(db, "videoReviews", reviewId), payload, { merge: true });
+  await updateDoc(doc(db, "videoProjects", project.id), {
+    updatedAt: serverTimestamp(),
+    lastActivityAt: serverTimestamp(),
+    lastActivityBy: profile.email,
+  });
+  if (action) await addActivity(project, profile, action);
 }
 
 async function syncExistingGroupWorkflowRoster(project, periodId, group, profile, assignedStudentEmails = null) {
@@ -2513,7 +2790,7 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
   `;
 }
 
-function GradeDashboard({ projects, loading, error, periods, workflowMap, privateNotesMap, profile, setToast }) {
+function GradeDashboard({ projects, loading, error, periods, workflowMap, reviewMap, privateNotesMap, profile, setToast }) {
   const activePeriods = getActivePeriods(periods);
   const [selectedPeriodId, setSelectedPeriodId] = useState("");
   const [selectedUnit, setSelectedUnit] = useState("");
@@ -2677,12 +2954,6 @@ function GradeDashboard({ projects, loading, error, periods, workflowMap, privat
                             )}
                           </div>
                         </div>
-                        <div className="rounded-3xl border border-lens/20 bg-lens/10 p-4">
-                          <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Review Studio coming later</p>
-                          <p className="mt-2 text-sm leading-6 text-slate-200">
-                            Timestamped comments, browser markup, and voiceover feedback can be added as app data later. Google Drive previews are cross-origin, so this app cannot draw inside or alter the Drive video player directly.
-                          </p>
-                        </div>
                         <div className="grid gap-4">
                           ${filteredItems.length
                             ? filteredItems.map(
@@ -2693,6 +2964,7 @@ function GradeDashboard({ projects, loading, error, periods, workflowMap, privat
                                     period=${item.period}
                                     group=${item.group}
                                     workflow=${item.workflow}
+                                    review=${reviewMap[videoReviewDocumentId(item.project.id, item.period.id, item.group.id)]}
                                     privateNote=${privateNotesMap[item.workflow.id]}
                                     profile=${profile}
                                     setToast=${setToast}
@@ -2716,7 +2988,427 @@ function GradeSummaryTile({ label, value }) {
   `;
 }
 
-function GradeSubmissionCard({ project, period, group, workflow, privateNote, profile, setToast }) {
+function ReviewDrawingSvg({ drawing, className = "" }) {
+  const strokes = normalizeDrawingStrokes(drawing?.strokes);
+  if (!strokes.length) return null;
+  return html`
+    <svg className=${classNames("pointer-events-none absolute inset-0 h-full w-full", className)} viewBox="0 0 100 100" preserveAspectRatio="none">
+      ${strokes.map(
+        (stroke, index) => html`
+          <polyline
+            key=${index}
+            points=${stroke.points.map((point) => `${point.x * 100},${point.y * 100}`).join(" ")}
+            fill="none"
+            stroke="rgb(56 189 248)"
+            strokeWidth="0.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        `,
+      )}
+    </svg>
+  `;
+}
+
+function VideoReviewSummaryPanel({ review, onOpen }) {
+  const notesCount = review.notes?.length || 0;
+  const recordingsCount = review.recordings?.length || 0;
+  return html`
+    <section className="rounded-2xl border border-lens/25 bg-lens/10 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-lens">Video Review Studio</p>
+          <p className="mt-1 text-sm font-black text-white">${videoReviewStatus(review)}</p>
+        </div>
+        <${Badge} icon=${review.published ? CheckCircle2 : Pencil}>
+          ${review.published ? "Published" : notesCount || recordingsCount ? "Draft" : "Not started"}
+        </${Badge}>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-300">
+        Use this for timestamped corrections, markup notes, and video-specific feedback. The official score stays in the Teacher Rubric.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <${Badge} icon=${FileText}>${notesCount} correction${notesCount === 1 ? "" : "s"}</${Badge}>
+        <${Badge} icon=${Video}>${recordingsCount} recording${recordingsCount === 1 ? "" : "s"}</${Badge}>
+      </div>
+      <${Button} icon=${Video} type="button" className="mt-4 w-full" onClick=${onOpen}>
+        Open Review Studio
+      </${Button}>
+    </section>
+  `;
+}
+
+function VideoReviewStudio({ project, period, group, workflow, review, profile, setToast, onClose }) {
+  const normalizedReview = normalizeVideoReview(project, period.id, group, workflow, review);
+  const [timestampDraft, setTimestampDraft] = useState("");
+  const [correctionDraft, setCorrectionDraft] = useState("");
+  const [markupMode, setMarkupMode] = useState(false);
+  const [strokes, setStrokes] = useState([]);
+  const [attachedDrawing, setAttachedDrawing] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [recordingMessage, setRecordingMessage] = useState("");
+  const overlayRef = useRef(null);
+  const drawingRef = useRef(false);
+  const previewUrl = getGoogleDrivePreviewUrl(workflow.submissionUrl);
+  const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
+  const submitted = hasSubmittedWorkflow(workflow);
+  const notes = sortReviewNotes(normalizedReview.notes);
+
+  useEffect(() => {
+    setTimestampDraft("");
+    setCorrectionDraft("");
+    setStrokes([]);
+    setAttachedDrawing(null);
+    setMarkupMode(false);
+    setRecordingMessage("");
+  }, [normalizedReview.reviewId]);
+
+  const pointFromEvent = (event) => {
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+    };
+  };
+
+  const startDrawing = (event) => {
+    if (!markupMode) return;
+    const point = pointFromEvent(event);
+    if (!point) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    drawingRef.current = true;
+    setStrokes((current) => [...current, { points: [point] }]);
+  };
+
+  const continueDrawing = (event) => {
+    if (!markupMode || !drawingRef.current) return;
+    const point = pointFromEvent(event);
+    if (!point) return;
+    event.preventDefault();
+    setStrokes((current) => {
+      if (!current.length) return current;
+      const next = [...current];
+      const lastStroke = next[next.length - 1];
+      next[next.length - 1] = { ...lastStroke, points: [...lastStroke.points, point] };
+      return next;
+    });
+  };
+
+  const stopDrawing = () => {
+    drawingRef.current = false;
+  };
+
+  const attachMarkup = () => {
+    const normalizedStrokes = normalizeDrawingStrokes(strokes);
+    if (!normalizedStrokes.length) {
+      setToast("Draw markup first, then attach it to a correction.");
+      return;
+    }
+    setAttachedDrawing({ type: "freehand", strokes: normalizedStrokes });
+    setToast("Markup attached to the next correction");
+  };
+
+  const clearMarkup = () => {
+    setStrokes([]);
+    setAttachedDrawing(null);
+  };
+
+  const saveNotes = async (nextNotes, action) => {
+    setBusy("notes");
+    try {
+      await saveVideoReview(project, period, group, workflow, normalizedReview, profile, { notes: nextNotes }, action);
+      setToast(action || "Review notes saved");
+    } catch (reviewError) {
+      setToast(reviewError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const addCorrection = async (event) => {
+    event.preventDefault();
+    const text = safeText(correctionDraft);
+    const timestampText = safeText(timestampDraft);
+    const seconds = parseTimestampToSeconds(timestampText);
+    if (!timestampText || seconds === null) {
+      setToast("Enter a timestamp like 00:42 or 1:15.");
+      return;
+    }
+    if (!text) {
+      setToast("Write the correction before saving it.");
+      return;
+    }
+    const note = {
+      id: makeId("correction"),
+      timestampLabel: normalizeTimestampLabel(timestampText),
+      timeSeconds: seconds,
+      text,
+      drawing: attachedDrawing,
+      createdAt: new Date().toISOString(),
+      createdBy: normalizeEmail(profile.email),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveNotes([...notes, note], "Added review correction");
+    setTimestampDraft("");
+    setCorrectionDraft("");
+    setAttachedDrawing(null);
+    setStrokes([]);
+  };
+
+  const editCorrection = async (note) => {
+    const nextText = window.prompt("Update this correction:", note.text);
+    if (nextText === null) return;
+    const text = safeText(nextText);
+    if (!text) {
+      setToast("Correction text cannot be blank.");
+      return;
+    }
+    await saveNotes(
+      notes.map((candidate) =>
+        candidate.id === note.id
+          ? { ...candidate, text, updatedAt: new Date().toISOString() }
+          : candidate,
+      ),
+      "Updated review correction",
+    );
+  };
+
+  const deleteCorrection = async (note) => {
+    if (!window.confirm(`Delete correction at ${note.timestampLabel}?`)) return;
+    await saveNotes(notes.filter((candidate) => candidate.id !== note.id), "Deleted review correction");
+  };
+
+  const publishReview = async (published) => {
+    setBusy("publish");
+    try {
+      await saveVideoReview(
+        project,
+        period,
+        group,
+        workflow,
+        normalizedReview,
+        profile,
+        {
+          published,
+          publishedAt: published ? serverTimestamp() : "",
+          publishedBy: published ? normalizeEmail(profile.email) : "",
+        },
+        published ? "Published video review feedback" : "Unpublished video review feedback",
+      );
+      setToast(published ? "Review feedback published" : "Review feedback unpublished");
+    } catch (publishError) {
+      setToast(publishError.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const startRecording = async () => {
+    setRecordingMessage(
+      "Recording requires Firebase Storage rules/configuration before the app can save WebM files. The Review Studio is ready for timestamped notes and markups now.",
+    );
+  };
+
+  return html`
+    <div className="fixed inset-0 z-[70] overflow-y-auto bg-black/80 p-3 backdrop-blur sm:p-5">
+      <section className="mx-auto max-w-7xl rounded-3xl border border-slate-700/80 bg-coal p-4 shadow-2xl sm:p-5">
+        <header className="flex flex-col gap-3 border-b border-slate-800 pb-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Video Review Studio</p>
+            <h2 className="mt-1 text-2xl font-black text-white">${project.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              ${period.periodName} - ${projectUnitLabel(project)} - ${group.name}
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              ${group.assignedStudentEmails.length ? group.assignedStudentEmails.map(titleFromEmail).join(", ") : "No students assigned"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <${Badge} icon=${submitted ? FileText : AlertTriangle}>${submitted ? "Submission linked" : "No submission"}</${Badge}>
+            <${Badge} icon=${normalizedReview.published ? CheckCircle2 : Pencil}>
+              ${normalizedReview.published ? "Published" : notes.length ? "Draft review" : "No review started"}
+            </${Badge}>
+            <${Button} icon=${X} variant="ghost" type="button" onClick=${onClose}>Close</${Button}>
+          </div>
+        </header>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
+          <section className="min-w-0">
+            <div className="relative overflow-hidden rounded-3xl border border-slate-700/80 bg-black">
+              ${previewUrl
+                ? html`
+                    <iframe
+                      className="aspect-video w-full bg-black"
+                      src=${previewUrl}
+                      allow="autoplay; fullscreen"
+                      allowFullScreen
+                      loading="lazy"
+                      title=${`${group.name} review preview`}
+                    ></iframe>
+                  `
+                : html`
+                    <div className="grid aspect-video place-items-center p-6 text-center">
+                      <div>
+                        <p className="font-black text-white">
+                          ${submitted ? "Preview unavailable. Open in Drive." : "No video submission link available yet."}
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-slate-500">
+                          Google Drive previews are cross-origin, so timestamps are entered manually.
+                        </p>
+                      </div>
+                    </div>
+                  `}
+              <div
+                ref=${overlayRef}
+                className=${classNames(
+                  "absolute inset-0",
+                  markupMode ? "cursor-crosshair touch-none" : "pointer-events-none",
+                )}
+                onPointerDown=${startDrawing}
+                onPointerMove=${continueDrawing}
+                onPointerUp=${stopDrawing}
+                onPointerCancel=${stopDrawing}
+                onPointerLeave=${stopDrawing}
+              >
+                <${ReviewDrawingSvg} drawing=${{ type: "freehand", strokes }} />
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              ${openUrl
+                ? html`
+                    <a
+                      className="inline-flex min-h-10 items-center justify-center rounded-xl bg-slate-800 px-3 py-2 text-sm font-black text-white ring-1 ring-slate-700 hover:bg-slate-700"
+                      href=${openUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open in Drive
+                    </a>
+                  `
+                : null}
+              <${Button} type="button" variant=${markupMode ? "primary" : "secondary"} onClick=${() => setMarkupMode((current) => !current)}>
+                Markup Mode
+              </${Button}>
+              <${Button} type="button" variant="ghost" onClick=${clearMarkup}>Clear Markup</${Button}>
+              <${Button} type="button" variant="secondary" onClick=${attachMarkup}>Attach Markup to Note</${Button}>
+            </div>
+            ${attachedDrawing
+              ? html`<p className="mt-2 text-sm font-bold text-lens">Markup is attached to the next correction.</p>`
+              : null}
+          </section>
+
+          <aside className="space-y-3">
+            <form onSubmit=${addCorrection} className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Timestamped Corrections</p>
+              <label className="mt-3 grid gap-1 text-sm font-bold text-slate-300">
+                Timestamp
+                <${TextInput}
+                  value=${timestampDraft}
+                  onInput=${(event) => setTimestampDraft(event.currentTarget.value)}
+                  placeholder="00:42"
+                />
+              </label>
+              <label className="mt-3 grid gap-1 text-sm font-bold text-slate-300">
+                Correction
+                <${Textarea}
+                  value=${correctionDraft}
+                  onInput=${(event) => setCorrectionDraft(event.currentTarget.value)}
+                  placeholder="What should the group fix at this moment?"
+                  className="min-h-28"
+                />
+              </label>
+              <${Button} icon=${Plus} type="submit" disabled=${busy === "notes"} className="mt-3 w-full">
+                ${busy === "notes" ? "Saving..." : "Add Correction"}
+              </${Button}>
+            </form>
+
+            <section className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Review Recording</p>
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                Screen/tab recording can be enabled after Firebase Storage rules are added. Large video blobs are not stored in Firestore.
+              </p>
+              <${Button} icon=${Video} type="button" variant="secondary" className="mt-3 w-full" onClick=${startRecording}>
+                Start Review Recording
+              </${Button}>
+              ${recordingMessage
+                ? html`<p className="mt-2 rounded-xl bg-warning/10 p-3 text-sm leading-6 text-amber-100">${recordingMessage}</p>`
+                : null}
+            </section>
+
+            <section className="rounded-2xl border border-slate-700/70 bg-slate-950/42 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Saved Corrections</p>
+                <${Badge} icon=${FileText}>${notes.length}</${Badge}>
+              </div>
+              <div className="mt-3 grid max-h-[22rem] gap-2 overflow-y-auto pr-1 vp-scroll">
+                ${notes.length
+                  ? notes.map(
+                      (note) => html`
+                        <article key=${note.id} className="rounded-2xl bg-slate-900 p-3 ring-1 ring-slate-700/70">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-black text-lens">${note.timestampLabel}</p>
+                              <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-200">${note.text}</p>
+                            </div>
+                            <div className="flex shrink-0 gap-1">
+                              <button type="button" className="rounded-lg px-2 py-1 text-xs font-black text-slate-300 hover:bg-slate-800" onClick=${() => editCorrection(note)}>Edit</button>
+                              <button type="button" className="rounded-lg px-2 py-1 text-xs font-black text-red-200 hover:bg-alert/15" onClick=${() => deleteCorrection(note)}>Delete</button>
+                            </div>
+                          </div>
+                          ${note.drawing
+                            ? html`
+                                <div className="relative mt-3 aspect-video overflow-hidden rounded-xl bg-slate-950 ring-1 ring-lens/25">
+                                  <${ReviewDrawingSvg} drawing=${note.drawing} />
+                                </div>
+                              `
+                            : null}
+                        </article>
+                      `,
+                    )
+                  : html`<p className="rounded-xl bg-slate-900 p-3 text-sm text-slate-500">No corrections saved yet.</p>`}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-lens/25 bg-lens/10 p-3">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-lens">Publish</p>
+              <p className="mt-2 text-sm leading-6 text-slate-200">
+                Publishing makes saved review corrections visible to this student group. It does not change the official rubric score.
+              </p>
+              <div className="mt-3 grid gap-2">
+                <${Button}
+                  icon=${CheckCircle2}
+                  type="button"
+                  disabled=${busy === "publish"}
+                  onClick=${() => publishReview(true)}
+                >
+                  Publish Review Feedback
+                </${Button}>
+                ${normalizedReview.published
+                  ? html`
+                      <${Button}
+                        type="button"
+                        variant="ghost"
+                        disabled=${busy === "publish"}
+                        onClick=${() => publishReview(false)}
+                      >
+                        Unpublish Review Feedback
+                      </${Button}>
+                    `
+                  : null}
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function GradeSubmissionCard({ project, period, group, workflow, review, privateNote, profile, setToast }) {
   const [draft, setDraft] = useState(() => ({
     teacherRubricScores: normalizeRubricScores(workflow.teacherRubricScores),
     teacherRubricComplete: normalizeRubricComplete(workflow.teacherRubricComplete, workflow.teacherRubricScores),
@@ -2725,9 +3417,11 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
     feedbackPublished: workflow.feedbackPublished === true,
   }));
   const [selfExpanded, setSelfExpanded] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const previewUrl = getGoogleDrivePreviewUrl(workflow.submissionUrl);
   const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
+  const normalizedReview = normalizeVideoReview(project, period.id, group, workflow, review);
   const rubricMaxTotal = getRubricMaxTotal();
   const teacherTotal = calculateRubricTotal(draft.teacherRubricScores);
   const teacherPercent = gradePercent(teacherTotal, rubricMaxTotal);
@@ -2846,7 +3540,7 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
         </div>
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.85fr]">
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.95fr] 2xl:grid-cols-[minmax(0,1fr)_minmax(26rem,0.82fr)_minmax(22rem,0.65fr)]">
         <section className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
           <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -3013,7 +3707,26 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
             </${Button}>
           </div>
         </section>
+
+        <${VideoReviewSummaryPanel}
+          review=${normalizedReview}
+          onOpen=${() => setReviewOpen(true)}
+        />
       </div>
+      ${reviewOpen
+        ? html`
+            <${VideoReviewStudio}
+              project=${project}
+              period=${period}
+              group=${group}
+              workflow=${workflow}
+              review=${normalizedReview}
+              profile=${profile}
+              setToast=${setToast}
+              onClose=${() => setReviewOpen(false)}
+            />
+          `
+        : null}
     </article>
   `;
 }
@@ -4899,6 +5612,7 @@ function StudentFilmingHome({
   enrollmentsError,
   periodsLoading,
   workflowMap,
+  reviewMap = {},
   workflowsLoading,
   workflowsError,
   setToast,
@@ -4971,6 +5685,7 @@ function StudentFilmingHome({
               project=${selectedProject}
               enrollments=${activeEnrollments}
               workflowMap=${workflowMap}
+              reviewMap=${reviewMap}
               setToast=${setToast}
               setKioskActive=${setKioskActive}
             />
@@ -4980,7 +5695,7 @@ function StudentFilmingHome({
   `;
 }
 
-function AdminStudentPreview({ profile, project, workflowMap, setToast, setKioskActive, onClose }) {
+function AdminStudentPreview({ profile, project, workflowMap, reviewMap, setToast, setKioskActive, onClose }) {
   const periodSummaries = projectPeriodSummaries(project);
   const [selectedPeriodId, setSelectedPeriodId] = useState(periodSummaries[0]?.id || "");
   const currentGroups = projectGroupsForPeriod(project, selectedPeriodId);
@@ -5042,6 +5757,7 @@ function AdminStudentPreview({ profile, project, workflowMap, setToast, setKiosk
         contextPeriodId=${selectedPeriodId}
         contextGroupId=${selectedGroupId}
         workflowMap=${workflowMap}
+        reviewMap=${reviewMap}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         previewMode=${true}
@@ -5050,7 +5766,7 @@ function AdminStudentPreview({ profile, project, workflowMap, setToast, setKiosk
   `;
 }
 
-function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, setToast, setKioskActive, onClose }) {
+function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, reviewMap, setToast, setKioskActive, onClose }) {
   const activeProjects = projects.filter((project) => project.status !== "archived");
   const [selectedProjectId, setSelectedProjectId] = useState(activeProjects[0]?.id || "");
 
@@ -5139,6 +5855,7 @@ function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, set
               contextPeriodId=${period.id}
               contextGroupId=${selectedGroupId}
               workflowMap=${workflowMap}
+              reviewMap=${reviewMap}
               setToast=${setToast}
               setKioskActive=${setKioskActive}
               previewMode=${true}
@@ -5162,6 +5879,7 @@ function FilmingWorkspace({
   contextPeriodId = "",
   contextGroupId = "",
   workflowMap = {},
+  reviewMap = {},
   setToast,
   setKioskActive,
   previewMode = false,
@@ -5183,6 +5901,15 @@ function FilmingWorkspace({
   const activeGroup = workflowContext.group;
   const activeWorkflow = activeGroup
     ? workflowForContext(project, workflowContext.periodId, activeGroup, workflowMap)
+    : null;
+  const activeReview = activeGroup
+    ? normalizeVideoReview(
+        project,
+        workflowContext.periodId,
+        activeGroup,
+        activeWorkflow,
+        reviewMap[videoReviewDocumentId(project.id, workflowContext.periodId, activeGroup.id)],
+      )
     : null;
 
   useEffect(() => {
@@ -5504,6 +6231,8 @@ function FilmingWorkspace({
         setToast=${setToast}
       />
 
+      <${TeacherVideoReview} review=${activeReview} />
+
       ${filmingMode
         ? html`
             <section className="rounded-3xl border border-slate-700/70 bg-slate-950/72 p-4 text-sm leading-6 text-slate-300">
@@ -5764,6 +6493,81 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
               `}
         </div>
       </div>
+    </section>
+  `;
+}
+
+function TeacherVideoReview({ review }) {
+  if (!review?.published) return null;
+  const notes = sortReviewNotes(review.notes);
+  const recordings = Array.isArray(review.recordings)
+    ? review.recordings.map(normalizeReviewRecording).filter((recording) => recording.downloadUrl)
+    : [];
+
+  return html`
+    <section className="vp-panel rounded-3xl border border-lens/25 p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Teacher Video Review</p>
+          <h2 className="mt-1 text-lg font-black text-white">Video-specific corrections</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-400">
+            These notes are separate from the official rubric score and point to moments in your submitted video.
+          </p>
+        </div>
+        <${Badge} icon=${CheckCircle2}>Published review</${Badge}>
+      </div>
+
+      <div className="grid gap-3">
+        ${notes.length
+          ? notes.map(
+              (note) => html`
+                <article key=${note.id} className="rounded-2xl bg-slate-950/45 p-3 ring-1 ring-slate-700/70">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <p className="font-black text-lens">${note.timestampLabel || "General note"}</p>
+                    ${note.updatedAt || note.createdAt
+                      ? html`<p className="text-xs font-bold text-slate-500">${timestampLabel(note.updatedAt || note.createdAt)}</p>`
+                      : null}
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">${note.text}</p>
+                  ${note.drawing
+                    ? html`
+                        <div className="relative mt-3 aspect-video overflow-hidden rounded-xl bg-slate-950 ring-1 ring-lens/25">
+                          <${ReviewDrawingSvg} drawing=${note.drawing} />
+                        </div>
+                      `
+                    : null}
+                </article>
+              `,
+            )
+          : html`
+              <p className="rounded-2xl bg-slate-950/45 p-3 text-sm leading-6 text-slate-400 ring-1 ring-slate-700/70">
+                Your teacher published the review, but no timestamped corrections were added.
+              </p>
+            `}
+      </div>
+
+      ${recordings.length
+        ? html`
+            <div className="mt-4 grid gap-3">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Review recordings</p>
+              ${recordings.map(
+                (recording) => html`
+                  <article key=${recording.id} className="rounded-2xl bg-slate-950/45 p-3 ring-1 ring-slate-700/70">
+                    <video
+                      className="w-full rounded-xl bg-black"
+                      controls
+                      src=${recording.downloadUrl}
+                      preload="metadata"
+                    ></video>
+                    <p className="mt-2 text-xs font-bold text-slate-500">
+                      ${recording.fileName || "Teacher review recording"}
+                    </p>
+                  </article>
+                `,
+              )}
+            </div>
+          `
+        : null}
     </section>
   `;
 }
@@ -6482,6 +7286,11 @@ function VideoProductionApp() {
     loading: workflowsLoading,
     error: workflowsError,
   } = useProjectGroupWorkflows(profile, projects);
+  const {
+    reviews: videoReviews,
+    loading: reviewsLoading,
+    error: reviewsError,
+  } = useVideoReviews(profile, projects);
   const { users, loading: usersLoading, error: usersError } = useVideoUsers(isVideoAdmin(profile));
   const { profiles: studentProfiles, error: profilesError } = useVideoStudentProfiles(
     isVideoTeacher(profile) || isVideoAdmin(profile),
@@ -6561,6 +7370,7 @@ function VideoProductionApp() {
         period=${previewPeriod}
         projects=${previewPeriodProjects}
         workflowMap=${projectGroupWorkflows}
+        reviewMap=${videoReviews}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         onClose=${() => setPreviewPeriodId("")}
@@ -6572,6 +7382,7 @@ function VideoProductionApp() {
         profile=${profile}
         project=${previewProject}
         workflowMap=${projectGroupWorkflows}
+        reviewMap=${videoReviews}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         onClose=${() => setPreviewProjectId("")}
@@ -6590,8 +7401,9 @@ function VideoProductionApp() {
         enrollmentsError=${enrollmentsError}
         periodsLoading=${periodsLoading}
         workflowMap=${projectGroupWorkflows}
-        workflowsLoading=${workflowsLoading}
-        workflowsError=${workflowsError}
+        reviewMap=${videoReviews}
+        workflowsLoading=${workflowsLoading || reviewsLoading}
+        workflowsError=${workflowsError || reviewsError}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
       />
@@ -6651,10 +7463,11 @@ function VideoProductionApp() {
       <${GradeDashboard}
         profile=${profile}
         projects=${projects}
-        loading=${projectsLoading || workflowsLoading}
-        error=${projectsError || periodsError || workflowsError || privateNotesError}
+        loading=${projectsLoading || workflowsLoading || reviewsLoading}
+        error=${projectsError || periodsError || workflowsError || reviewsError || privateNotesError}
         periods=${periods}
         workflowMap=${projectGroupWorkflows}
+        reviewMap=${videoReviews}
         privateNotesMap=${privateGradeNotes}
         setToast=${setToast}
       />
