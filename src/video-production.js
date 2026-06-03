@@ -111,36 +111,50 @@ const VIDEO_PRODUCTION_RUBRIC = [
     id: "planning",
     label: "Planning / Pre-Production",
     maxPoints: 1,
+    description:
+      "Score how well your group prepared before filming: concept, roles, script or outline, shot planning, materials, and whether you were ready to begin production without wasting time.",
   },
   {
     id: "camera",
     label: "Camera Work / Shot Composition",
     maxPoints: 2,
+    description:
+      "Score the quality of your camera choices: stable footage, intentional framing, useful angles, clear subject placement, variety of shots, and whether the visuals help the audience understand the story.",
   },
   {
     id: "audio",
     label: "Audio Quality",
     maxPoints: 1,
+    description:
+      "Score whether voices, interviews, music, and natural sound are clear, balanced, and easy to hear, with limited background noise, distortion, or sudden volume changes.",
   },
   {
     id: "lighting",
     label: "Lighting / Visual Quality",
     maxPoints: 1,
+    description:
+      "Score whether the video is visually clear: subjects are well lit, exposure and color look usable, important details can be seen, and the final image feels polished instead of distracting.",
   },
   {
     id: "editing",
     label: "Editing in DaVinci Resolve",
     maxPoints: 2,
+    description:
+      "Score the editing craft in DaVinci Resolve: clean cuts, pacing, organized sequence, appropriate titles or graphics, usable audio levels, color adjustments, and an export that feels finished.",
   },
   {
     id: "story",
     label: "Story / Purpose",
     maxPoints: 2,
+    description:
+      "Score how clearly the project communicates its purpose: the audience understands the topic, the beginning and ending make sense, the information is organized, and the video feels meaningful.",
   },
   {
     id: "teamwork",
     label: "Teamwork / Equipment Use",
     maxPoints: 1,
+    description:
+      "Score how responsibly your group worked together: shared jobs fairly, stayed on task, solved problems respectfully, handled equipment safely, and used class filming time well.",
   },
 ];
 
@@ -2006,6 +2020,26 @@ function Badge({ icon: Icon, children, className = "" }) {
     <span className=${classNames("inline-flex items-center gap-2 rounded-full bg-slate-950/55 px-3 py-1 text-xs font-black text-slate-200 ring-1 ring-slate-700/70", className)}>
       ${Icon ? html`<${Icon} size=${14} />` : null}
       ${children}
+    </span>
+  `;
+}
+
+function RubricHelpMark({ label, description }) {
+  return html`
+    <span
+      className="group/help relative inline-flex align-middle"
+      tabIndex=${0}
+      role="button"
+      aria-label=${`${label} description`}
+    >
+      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-500/35 bg-transparent text-xs font-black text-slate-400/80 transition hover:border-lens/50 hover:text-lens group-focus/help:border-lens/50 group-focus/help:text-lens">
+        ?
+      </span>
+      <span
+        className="pointer-events-none invisible absolute left-1/2 top-full z-40 mt-2 w-72 -translate-x-1/2 rounded-2xl border border-lens/25 bg-slate-950/95 p-3 text-left text-xs font-semibold normal-case leading-5 tracking-normal text-slate-200 opacity-0 shadow-2xl shadow-black/40 transition group-hover/help:visible group-hover/help:opacity-100 group-focus/help:visible group-focus/help:opacity-100"
+      >
+        ${description}
+      </span>
     </span>
   `;
 }
@@ -5673,8 +5707,11 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
             <div className="grid gap-2">
               ${VIDEO_PRODUCTION_RUBRIC.map(
                 (item) => html`
-                  <label key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[1fr_auto] sm:items-center">
-                    <span className="text-sm font-bold text-slate-200">${item.label}</span>
+                  <div key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[1fr_auto] sm:items-center">
+                    <span className="flex min-w-0 items-center gap-2 text-sm font-bold text-slate-200">
+                      <span>${item.label}</span>
+                      <${RubricHelpMark} label=${item.label} description=${item.description} />
+                    </span>
                     <span className="flex items-center gap-2 text-sm font-black text-white">
                       <${TextInput}
                         type="number"
@@ -5689,7 +5726,7 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
                       />
                       <span className="text-slate-400">/ ${item.maxPoints}</span>
                     </span>
-                  </label>
+                  </div>
                 `,
               )}
             </div>
