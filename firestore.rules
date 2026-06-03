@@ -414,6 +414,72 @@ service cloud.firestore {
       ]);
     }
 
+    function completeStudentSelfAssessment() {
+      return request.resource.data.studentSelfAssessment is map
+        && request.resource.data.studentSelfAssessment.keys().hasAll([
+          "planning",
+          "camera",
+          "audio",
+          "lighting",
+          "editing",
+          "story",
+          "teamwork"
+        ])
+        && request.resource.data.studentSelfAssessment.planning is number
+        && request.resource.data.studentSelfAssessment.planning >= 0
+        && request.resource.data.studentSelfAssessment.planning <= 1
+        && request.resource.data.studentSelfAssessment.camera is number
+        && request.resource.data.studentSelfAssessment.camera >= 0
+        && request.resource.data.studentSelfAssessment.camera <= 2
+        && request.resource.data.studentSelfAssessment.audio is number
+        && request.resource.data.studentSelfAssessment.audio >= 0
+        && request.resource.data.studentSelfAssessment.audio <= 1
+        && request.resource.data.studentSelfAssessment.lighting is number
+        && request.resource.data.studentSelfAssessment.lighting >= 0
+        && request.resource.data.studentSelfAssessment.lighting <= 1
+        && request.resource.data.studentSelfAssessment.editing is number
+        && request.resource.data.studentSelfAssessment.editing >= 0
+        && request.resource.data.studentSelfAssessment.editing <= 2
+        && request.resource.data.studentSelfAssessment.story is number
+        && request.resource.data.studentSelfAssessment.story >= 0
+        && request.resource.data.studentSelfAssessment.story <= 2
+        && request.resource.data.studentSelfAssessment.teamwork is number
+        && request.resource.data.studentSelfAssessment.teamwork >= 0
+        && request.resource.data.studentSelfAssessment.teamwork <= 1
+        && request.resource.data.studentSelfAssessmentTotal is number
+        && request.resource.data.studentSelfAssessmentTotal == (
+          request.resource.data.studentSelfAssessment.planning
+          + request.resource.data.studentSelfAssessment.camera
+          + request.resource.data.studentSelfAssessment.audio
+          + request.resource.data.studentSelfAssessment.lighting
+          + request.resource.data.studentSelfAssessment.editing
+          + request.resource.data.studentSelfAssessment.story
+          + request.resource.data.studentSelfAssessment.teamwork
+        );
+    }
+
+    function completeFinalStudentSubmission() {
+      return request.resource.data.submissionUrl is string
+        && request.resource.data.submissionUrl.matches("^https://drive[.]google[.]com/.*")
+        && completeStudentSelfAssessment();
+    }
+
+    function studentFinalSubmissionCreateIsSafe() {
+      return request.resource.data.submittedAt == ""
+        || completeFinalStudentSubmission();
+    }
+
+    function studentFinalSubmissionUpdateIsSafe() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "submittedAt",
+          "submissionUrl",
+          "studentSelfAssessment",
+          "studentSelfAssessmentTotal"
+        ])
+        || request.resource.data.submittedAt == ""
+        || completeFinalStudentSubmission();
+    }
+
     function studentWorkflowUpdateIsSafe() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "filmingStatus",
@@ -980,6 +1046,7 @@ service cloud.firestore {
         && canManageVideoProjectId(request.resource.data.projectId);
       allow create: if validProjectGroupWorkflow(workflowId)
         && studentWorkflowCreateIsSafe()
+        && studentFinalSubmissionCreateIsSafe()
         && isVideoStudent()
         && signedInEmail() in request.resource.data.assignedStudentEmails
         && canReadVideoProjectId(request.resource.data.projectId);
@@ -991,6 +1058,7 @@ service cloud.firestore {
         && canManageVideoProjectId(resource.data.projectId);
       allow update: if validProjectGroupWorkflow(workflowId)
         && studentWorkflowUpdateIsSafe()
+        && studentFinalSubmissionUpdateIsSafe()
         && request.resource.data.workflowId == resource.data.workflowId
         && request.resource.data.projectId == resource.data.projectId
         && request.resource.data.periodId == resource.data.periodId

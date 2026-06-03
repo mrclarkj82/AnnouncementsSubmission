@@ -442,11 +442,13 @@ function safeFirestoreId(value) {
 
 function titleFromEmail(email) {
   const name = normalizeEmail(email).split("@")[0] || "student";
-  return name
+  const displayName = name
     .split(/[._-]+/)
     .filter(Boolean)
+    .filter((part) => !/^(dccp|p)\d+$/i.test(part))
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+  return displayName || "Student";
 }
 
 function slugFromName(name) {
@@ -959,6 +961,42 @@ function normalizeRubricScores(scores) {
     result[item.id] = clampRubricScore(source[item.id], item.maxPoints);
     return result;
   }, {});
+}
+
+function normalizeStudentRubricDraft(scores) {
+  const source = scores && typeof scores === "object" ? scores : {};
+  return VIDEO_PRODUCTION_RUBRIC.reduce((result, item) => {
+    const value = source[item.id];
+    if (value === undefined || value === null || safeText(value) === "") {
+      result[item.id] = "";
+      return result;
+    }
+    result[item.id] = clampRubricScore(value, item.maxPoints);
+    return result;
+  }, {});
+}
+
+function emptyStudentRubricDraft() {
+  return VIDEO_PRODUCTION_RUBRIC.reduce((result, item) => {
+    result[item.id] = "";
+    return result;
+  }, {});
+}
+
+function studentRubricDraftForWorkflow(workflow) {
+  return workflow?.studentSelfAssessmentUpdatedAt
+    ? normalizeStudentRubricDraft(workflow.studentSelfAssessment)
+    : emptyStudentRubricDraft();
+}
+
+function hasCompleteRubricDraft(scores) {
+  const source = scores && typeof scores === "object" ? scores : {};
+  return VIDEO_PRODUCTION_RUBRIC.every((item) => {
+    const value = source[item.id];
+    if (value === undefined || value === null || safeText(value) === "") return false;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 && number <= item.maxPoints;
+  });
 }
 
 function normalizeRubricComplete(complete, scores = {}) {
@@ -5388,7 +5426,7 @@ function FilmingWorkspace({
           `
         : null}
 
-      <${StudentSubmissionPanel}
+      <${StudentPlanningPanel}
         project=${project}
         periodId=${workflowContext.periodId}
         group=${activeGroup}
@@ -5417,6 +5455,15 @@ function FilmingWorkspace({
         profile=${profile}
       />
 
+      <${StudentSubmissionPanel}
+        project=${project}
+        periodId=${workflowContext.periodId}
+        group=${activeGroup}
+        workflow=${activeWorkflow}
+        profile=${profile}
+        setToast=${setToast}
+      />
+
       ${filmingMode
         ? html`
             <section className="rounded-3xl border border-slate-700/70 bg-slate-950/72 p-4 text-sm leading-6 text-slate-300">
@@ -5440,15 +5487,72 @@ function FilmingWorkspace({
   `;
 }
 
+function StudentPlanningPanel({ project, periodId, group, workflow, profile, setToast }) {
+  const [planningDraft, setPlanningDraft] = useState(() => safeText(workflow.planningText));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setPlanningDraft(safeText(workflow.planningText));
+  }, [workflow.id, workflow.planningText]);
+
+  const savePlanning = async (event = null) => {
+    event?.preventDefault?.();
+    setBusy(true);
+    try {
+      await saveGroupWorkflow(
+        project,
+        periodId,
+        group,
+        workflow,
+        profile,
+        {
+          planningText: safeText(planningDraft),
+          unit: getProjectUnit(project),
+        },
+        `Updated ${group.name} planning`,
+      );
+      setToast("Planning saved");
+    } catch (planningError) {
+      setToast(planningError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <section className="vp-panel rounded-3xl p-4">
+      <form onSubmit=${savePlanning} className="grid gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-black text-white">Planning / Pre-Production</h2>
+            <p className="text-sm leading-6 text-slate-400">
+              Describe your concept, script idea, shot list, roles, plan, or other pre-production work.
+            </p>
+          </div>
+          <${Button} icon=${Save} type="submit" variant="secondary" disabled=${busy} className="shrink-0">
+            ${busy ? "Saving..." : "Save Planning"}
+          </${Button}>
+        </div>
+        <${Textarea}
+          value=${planningDraft}
+          onInput=${(event) => setPlanningDraft(event.currentTarget.value)}
+          placeholder="Describe your concept, plan, roles, shot list, or pre-production work..."
+          className="min-h-36"
+        />
+      </form>
+    </section>
+  `;
+}
+
 function StudentSubmissionPanel({ project, periodId, group, workflow, profile, setToast }) {
   const [submissionDraft, setSubmissionDraft] = useState(() => safeText(workflow.submissionUrl));
-  const [planningDraft, setPlanningDraft] = useState(() => safeText(workflow.planningText));
   const [selfAssessmentDraft, setSelfAssessmentDraft] = useState(() =>
-    normalizeRubricScores(workflow.studentSelfAssessment),
+    studentRubricDraftForWorkflow(workflow),
   );
   const [busy, setBusy] = useState(false);
   const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
   const rubricMaxTotal = getRubricMaxTotal();
+  const selfAssessmentComplete = hasCompleteRubricDraft(selfAssessmentDraft);
   const studentSelfTotal = calculateRubricTotal(selfAssessmentDraft);
   const teacherTotal = calculateRubricTotal(workflow.teacherRubricScores);
   const hasTeacherRubricGrade = Boolean(workflow.reviewed || workflow.gradedAt || teacherTotal);
@@ -5457,23 +5561,34 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
 
   useEffect(() => {
     setSubmissionDraft(safeText(workflow.submissionUrl));
-    setPlanningDraft(safeText(workflow.planningText));
-    setSelfAssessmentDraft(normalizeRubricScores(workflow.studentSelfAssessment));
-  }, [workflow.id, workflow.submissionUrl, workflow.planningText, workflow.studentSelfAssessment]);
+    setSelfAssessmentDraft(studentRubricDraftForWorkflow(workflow));
+  }, [
+    workflow.id,
+    workflow.submissionUrl,
+    workflow.studentSelfAssessment,
+    workflow.studentSelfAssessmentUpdatedAt,
+  ]);
 
   const updateSelfAssessment = (rubricItem, value) => {
-    const score = clampRubricScore(value, rubricItem.maxPoints);
     setSelfAssessmentDraft((current) => ({
       ...current,
-      [rubricItem.id]: score,
+      [rubricItem.id]: safeText(value) === "" ? "" : clampRubricScore(value, rubricItem.maxPoints),
     }));
   };
 
   const saveSubmission = async (event = null) => {
     event?.preventDefault?.();
     const normalizedUrl = normalizeGoogleDriveUrl(submissionDraft);
-    if (safeText(submissionDraft) && (!normalizedUrl || !isLikelyGoogleDriveUrl(normalizedUrl))) {
+    if (!safeText(submissionDraft)) {
+      setToast("Paste a Google Drive video link before submitting.");
+      return;
+    }
+    if (!normalizedUrl || !isLikelyGoogleDriveUrl(normalizedUrl)) {
       setToast("Paste a valid Google Drive link before submitting.");
+      return;
+    }
+    if (!selfAssessmentComplete) {
+      setToast("Enter a score for every self-assessment category before submitting.");
       return;
     }
     const normalizedSelfAssessment = normalizeRubricScores(selfAssessmentDraft);
@@ -5492,7 +5607,6 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
           submittedAt: serverTimestamp(),
           submittedBy: profile.uid || "",
           submittedByEmail: normalizeEmail(profile.email),
-          planningText: safeText(planningDraft),
           studentSelfAssessment: normalizedSelfAssessment,
           studentSelfAssessmentTotal: calculateRubricTotal(normalizedSelfAssessment),
           studentSelfAssessmentUpdatedAt: serverTimestamp(),
@@ -5515,22 +5629,10 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
       <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
         <div>
           <div className="mb-3">
-            <h2 className="text-lg font-black text-white">Planning / Pre-Production</h2>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Last Step</p>
+            <h2 className="mt-1 text-lg font-black text-white">Final Submission</h2>
             <p className="text-sm leading-6 text-slate-400">
-              Describe your concept, script idea, shot list, roles, plan, or other pre-production work.
-            </p>
-          </div>
-          <${Textarea}
-            value=${planningDraft}
-            onInput=${(event) => setPlanningDraft(event.currentTarget.value)}
-            placeholder="Describe your concept, plan, roles, shot list, or pre-production work..."
-            className="min-h-36"
-          />
-
-          <div className="mb-3 mt-5">
-            <h2 className="text-lg font-black text-white">Final Submission</h2>
-            <p className="text-sm leading-6 text-slate-400">
-              Paste the group's Google Drive video link here. The teacher can preview it in Grade.
+              Paste the group's Google Drive video link and complete the self-assessment to submit.
             </p>
           </div>
           <form onSubmit=${saveSubmission} className="grid gap-2 sm:grid-cols-[1fr_auto]">
@@ -5539,6 +5641,7 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
               onInput=${(event) => setSubmissionDraft(event.currentTarget.value)}
               placeholder="https://drive.google.com/file/d/..."
               aria-label="Google Drive submission link"
+              required=${true}
             />
             <${Button} icon=${Save} type="submit" disabled=${busy}>
               ${busy ? "Saving..." : "Save Submission"}
@@ -5560,7 +5663,10 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-black text-white">Student Self-Assessment</h2>
-                <p className="text-sm text-slate-400">Student Self-Score: ${formatRubricScore(studentSelfTotal, rubricMaxTotal)}</p>
+                <p className="text-sm text-slate-400">
+                  Student Self-Score:
+                  ${selfAssessmentComplete ? formatRubricScore(studentSelfTotal, rubricMaxTotal) : "Complete every category"}
+                </p>
               </div>
               <${Badge} icon=${CheckCircle2}>10 pts</${Badge}>
             </div>
@@ -5578,6 +5684,7 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
                         value=${selfAssessmentDraft[item.id]}
                         onInput=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
                         aria-label=${`${item.label} self-assessment score`}
+                        required=${true}
                         className="w-16 py-2"
                       />
                       <span className="text-slate-400">/ ${item.maxPoints}</span>
