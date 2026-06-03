@@ -2923,7 +2923,10 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
                     ${VIDEO_PRODUCTION_RUBRIC.map(
                       (item) => html`
                         <div key=${item.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-950/45 px-3 py-2 text-sm">
-                          <span className="font-bold text-slate-300">${item.label}</span>
+                          <span className="flex min-w-0 items-center gap-2 font-bold text-slate-300">
+                            <span>${item.label}</span>
+                            <${RubricHelpMark} label=${item.label} description=${item.description} />
+                          </span>
                           <span className="font-black text-white">${studentScores[item.id]}/${item.maxPoints}</span>
                         </div>
                       `,
@@ -2948,8 +2951,8 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
           <div className="grid gap-2">
             ${VIDEO_PRODUCTION_RUBRIC.map(
               (item) => html`
-                <div key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[5.5rem_1fr_auto] sm:items-center">
-                  <label className="flex items-center gap-2 text-sm font-black text-white">
+                <div key=${item.id} className="grid gap-3 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[7.5rem_minmax(0,1fr)_auto] sm:items-center">
+                  <label className="flex w-[7.5rem] shrink-0 items-center gap-2 whitespace-nowrap text-sm font-black text-white">
                     <${TextInput}
                       type="number"
                       min="0"
@@ -2962,7 +2965,10 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
                     />
                     <span className="text-slate-400">/ ${item.maxPoints}</span>
                   </label>
-                  <p className="text-sm font-bold text-slate-200">${item.label}</p>
+                  <p className="flex min-w-0 items-center gap-2 text-sm font-bold text-slate-200">
+                    <span>${item.label}</span>
+                    <${RubricHelpMark} label=${item.label} description=${item.description} />
+                  </p>
                   <label className="flex items-center gap-2 text-sm font-bold text-slate-300">
                     <input
                       type="checkbox"
