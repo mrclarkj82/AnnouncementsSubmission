@@ -3011,6 +3011,46 @@ function ReviewDrawingSvg({ drawing, className = "" }) {
   `;
 }
 
+function ReviewMarkupPreview({ review, note, title = "Video markup preview" }) {
+  const previewUrl = getGoogleDrivePreviewUrl(review?.submissionUrl);
+  const openUrl = normalizeGoogleDriveUrl(review?.submissionUrl);
+  return html`
+    <div className="relative mt-3 aspect-video overflow-hidden rounded-xl bg-slate-950 ring-1 ring-lens/25">
+      ${previewUrl
+        ? html`
+            <iframe
+              className="h-full w-full bg-black"
+              src=${previewUrl}
+              allow="autoplay; fullscreen"
+              allowFullScreen
+              loading="lazy"
+              title=${title}
+            ></iframe>
+          `
+        : html`
+            <div className="grid h-full place-items-center p-4 text-center">
+              <div>
+                <p className="text-sm font-black text-white">Video preview unavailable</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  The markup is still positioned over the review frame. Open the Drive video separately if needed.
+                </p>
+                ${openUrl
+                  ? html`
+                      <a className="mt-2 inline-flex text-xs font-black text-lens hover:text-sky-200" href=${openUrl} target="_blank" rel="noreferrer">
+                        Open in Drive
+                      </a>
+                    `
+                  : null}
+              </div>
+            </div>
+          `}
+      <div className="pointer-events-none absolute inset-0">
+        <${ReviewDrawingSvg} drawing=${note?.drawing} />
+      </div>
+    </div>
+  `;
+}
+
 function VideoReviewSummaryPanel({ review, onOpen }) {
   const notesCount = review.notes?.length || 0;
   const recordingsCount = review.recordings?.length || 0;
@@ -3361,9 +3401,11 @@ function VideoReviewStudio({ project, period, group, workflow, review, profile, 
                           </div>
                           ${note.drawing
                             ? html`
-                                <div className="relative mt-3 aspect-video overflow-hidden rounded-xl bg-slate-950 ring-1 ring-lens/25">
-                                  <${ReviewDrawingSvg} drawing=${note.drawing} />
-                                </div>
+                                <${ReviewMarkupPreview}
+                                  review=${normalizedReview}
+                                  note=${note}
+                                  title=${`${group.name} markup at ${note.timestampLabel}`}
+                                />
                               `
                             : null}
                         </article>
@@ -6545,9 +6587,11 @@ function TeacherVideoReview({ review }) {
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">${note.text}</p>
                   ${note.drawing
                     ? html`
-                        <div className="relative mt-3 aspect-video overflow-hidden rounded-xl bg-slate-950 ring-1 ring-lens/25">
-                          <${ReviewDrawingSvg} drawing=${note.drawing} />
-                        </div>
+                        <${ReviewMarkupPreview}
+                          review=${review}
+                          note=${note}
+                          title=${`${review.groupName || "Group"} markup at ${note.timestampLabel}`}
+                        />
                       `
                     : null}
                 </article>
