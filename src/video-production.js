@@ -985,7 +985,7 @@ function normalizeStudentRubricDraft(scores) {
   const source = scores && typeof scores === "object" ? scores : {};
   return VIDEO_PRODUCTION_RUBRIC.reduce((result, item) => {
     const value = source[item.id];
-    if (value === undefined || value === null || safeText(value) === "") {
+    if (value === undefined || value === null || valueText(value) === "") {
       result[item.id] = "";
       return result;
     }
@@ -1011,7 +1011,7 @@ function hasCompleteRubricDraft(scores) {
   const source = scores && typeof scores === "object" ? scores : {};
   return VIDEO_PRODUCTION_RUBRIC.every((item) => {
     const value = source[item.id];
-    if (value === undefined || value === null || safeText(value) === "") return false;
+    if (value === undefined || value === null || valueText(value) === "") return false;
     const number = Number(value);
     return Number.isFinite(number) && number >= 0 && number <= item.maxPoints;
   });
@@ -6314,6 +6314,7 @@ function StudentPlanningPanel({ project, periodId, group, workflow, profile, set
 }
 
 function StudentSubmissionPanel({ project, periodId, group, workflow, profile, setToast }) {
+  const submissionPanelRef = useRef(null);
   const [submissionDraft, setSubmissionDraft] = useState(() => safeText(workflow.submissionUrl));
   const [selfAssessmentDraft, setSelfAssessmentDraft] = useState(() =>
     studentRubricDraftForWorkflow(workflow),
@@ -6345,9 +6346,18 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
     }));
   };
 
+  const currentSelfAssessmentDraft = () =>
+    VIDEO_PRODUCTION_RUBRIC.reduce((draft, item) => {
+      const field = submissionPanelRef.current?.querySelector(`[data-self-assessment-score="${item.id}"]`);
+      const value = field ? field.value : selfAssessmentDraft[item.id];
+      draft[item.id] = valueText(value) === "" ? "" : clampRubricScore(value, item.maxPoints);
+      return draft;
+    }, {});
+
   const saveSubmission = async (event = null) => {
     event?.preventDefault?.();
     const normalizedUrl = normalizeGoogleDriveUrl(submissionDraft);
+    const activeSelfAssessmentDraft = currentSelfAssessmentDraft();
     if (!safeText(submissionDraft)) {
       setToast("Paste a Google Drive video link before submitting.");
       return;
@@ -6356,11 +6366,12 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
       setToast("Paste a valid Google Drive link before submitting.");
       return;
     }
-    if (!selfAssessmentComplete) {
+    if (!hasCompleteRubricDraft(activeSelfAssessmentDraft)) {
       setToast("Enter a score for every self-assessment category before submitting.");
       return;
     }
-    const normalizedSelfAssessment = normalizeRubricScores(selfAssessmentDraft);
+    const normalizedSelfAssessment = normalizeRubricScores(activeSelfAssessmentDraft);
+    setSelfAssessmentDraft(normalizeStudentRubricDraft(normalizedSelfAssessment));
 
     setBusy(true);
     try {
@@ -6394,7 +6405,7 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
   };
 
   return html`
-    <section className="vp-panel rounded-3xl p-4">
+    <section ref=${submissionPanelRef} className="vp-panel rounded-3xl p-4">
       <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
         <div>
           <div className="mb-3">
@@ -6408,6 +6419,7 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
             <${TextInput}
               value=${submissionDraft}
               onInput=${(event) => setSubmissionDraft(event.currentTarget.value)}
+              onChange=${(event) => setSubmissionDraft(event.currentTarget.value)}
               placeholder="https://drive.google.com/file/d/..."
               aria-label="Google Drive submission link"
               required=${true}
@@ -6455,6 +6467,8 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
                         step="1"
                         value=${selfAssessmentDraft[item.id]}
                         onInput=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
+                        onChange=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
+                        data-self-assessment-score=${item.id}
                         aria-label=${`${item.label} self-assessment score`}
                         required=${true}
                         className="w-16 py-2"
