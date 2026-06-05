@@ -3169,6 +3169,7 @@ function MonitorProgressBar({ label, valueLabel, percent, barClass }) {
 }
 
 function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, interestIndex }) {
+  const checklistProgressValue = checklistProgress(workflow.checklistItems);
   const statusProgress = getProjectStatusProgress(workflow.filmingStatus);
   const statusTheme = getProjectStatusTheme(workflow.filmingStatus);
   const students = group.assignedStudentEmails || [];
@@ -3214,6 +3215,19 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
           percent=${statusProgress.percent}
           barClass=${statusTheme.bar}
         />
+        <div
+          className="h-2.5 overflow-hidden rounded-full bg-slate-950/80 ring-1 ring-white/10"
+          role="progressbar"
+          aria-label="Daily Recording Checklist progress"
+          aria-valuemin="0"
+          aria-valuemax=${checklistProgressValue.total}
+          aria-valuenow=${checklistProgressValue.completed}
+        >
+          <div
+            className="h-full rounded-full bg-white transition-all duration-500"
+            style=${{ width: `${checklistProgressValue.percent}%` }}
+          ></div>
+        </div>
       </div>
 
       <div className="mt-3 grid gap-2 text-sm text-slate-300">
