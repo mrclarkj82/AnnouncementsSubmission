@@ -327,6 +327,8 @@ service cloud.firestore {
           "assignedStudentNames",
           "filmingStatus",
           "currentTask",
+          "checklistDateKey",
+          "dailyChecklists",
           "checklistItems",
           "checklistCompletedCount",
           "checklistTotal",
@@ -376,7 +378,10 @@ service cloud.firestore {
         && request.resource.data.assignedStudentEmails is list
         && request.resource.data.assignedStudentNames is list
         && request.resource.data.filmingStatus is string
+        && validWorkflowProjectStatus(request.resource.data.filmingStatus)
         && request.resource.data.currentTask is string
+        && request.resource.data.checklistDateKey is string
+        && request.resource.data.dailyChecklists is map
         && request.resource.data.checklistItems is list
         && request.resource.data.checklistCompletedCount is number
         && request.resource.data.checklistTotal is number
@@ -502,6 +507,8 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "filmingStatus",
         "currentTask",
+        "checklistDateKey",
+        "dailyChecklists",
         "checklistItems",
         "checklistCompletedCount",
         "checklistTotal",
@@ -529,6 +536,10 @@ service cloud.firestore {
       && (
         !request.resource.data.diff(resource.data).affectedKeys().hasAny(["latestSubmissionVersionStatus"])
         || request.resource.data.latestSubmissionVersionStatus == "Submitted"
+      )
+      && (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["filmingStatus"])
+        || studentAllowedWorkflowProjectStatus(request.resource.data.filmingStatus)
       );
     }
 
@@ -559,6 +570,29 @@ service cloud.firestore {
         "Reviewed",
         "Needs Revision",
         "Final Approved"
+      ];
+    }
+
+    function validWorkflowProjectStatus(statusValue) {
+      return statusValue in [
+        "notStarted",
+        "planning",
+        "filming",
+        "editing",
+        "submitted",
+        "reviewed",
+        "needsRevision",
+        "finalApproved"
+      ];
+    }
+
+    function studentAllowedWorkflowProjectStatus(statusValue) {
+      return statusValue in [
+        "notStarted",
+        "planning",
+        "filming",
+        "editing",
+        "submitted"
       ];
     }
 

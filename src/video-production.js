@@ -85,18 +85,28 @@ const REQUIRED_VIDEO_ADMIN_EMAILS = [
 const DORAL_STAFF_DOMAIN = "@doralacademynv.org";
 const DORAL_STUDENT_DOMAIN = "@student.doralacademynv.org";
 
+const DAILY_RECORDING_TIME_ZONE = "America/Los_Angeles";
 const DEFAULT_PRODUCTION_CHECKLIST = [
-  "Equipment picked up",
-  "Script finalized",
-  "Shot list completed",
-  "Intro filmed",
-  "Interview filmed",
-  "B-roll filmed",
-  "Audio checked",
-  "Outro filmed",
-  "Footage reviewed",
-  "Uploaded footage",
+  { id: "equipmentCheckedOut", label: "Equipment checked out" },
+  { id: "cameraBatteryChecked", label: "Camera battery checked" },
+  { id: "storageChecked", label: "Storage / SD card checked" },
+  { id: "supportReady", label: "Tripod or stabilizer ready" },
+  { id: "audioChecked", label: "Microphone / audio checked" },
+  { id: "lightingChecked", label: "Lighting checked" },
+  { id: "cameraSettingsChecked", label: "Focus, exposure, and white balance checked" },
+  { id: "testRecordingReviewed", label: "Test recording reviewed" },
+  { id: "footageBackedUp", label: "Footage uploaded or backed up" },
+  { id: "equipmentReturned", label: "Equipment returned" },
 ];
+const REMOVED_CHECKLIST_LABELS = new Set([
+  "scriptfinalized",
+  "scriptfinalize",
+  "shotlistcompleted",
+  "introfilmed",
+  "interviewfilmed",
+  "brollfilmed",
+  "outrofilmed",
+]);
 
 const DEFAULT_SHOTS = [
   "Opening establishing shot",
@@ -161,15 +171,23 @@ const PROJECT_STATUSES = ["active", "paused", "complete", "archived"];
 const PROJECT_UNITS = [1, 2, 3, 4];
 const SUBMISSION_VERSION_LABELS = ["Version", "Draft Cut", "Revision", "Final Cut"];
 const SUBMISSION_VERSION_STATUSES = ["Submitted", "Reviewed", "Needs Revision", "Final Approved"];
-const FILMING_STATUSES = [
-  "Not started",
-  "Equipment check",
-  "Writing",
-  "Filming",
-  "Reviewing footage",
-  "Uploading",
-  "Complete",
+const PROJECT_STATUS_PIPELINE = [
+  { value: "notStarted", label: "Not Started", student: true, tone: "bg-slate-800 text-slate-200 ring-slate-600" },
+  { value: "planning", label: "Planning", student: true, tone: "bg-violetline/15 text-violet-100 ring-violetline/35" },
+  { value: "filming", label: "Filming", student: true, tone: "bg-signal/15 text-green-100 ring-signal/35" },
+  { value: "editing", label: "Editing", student: true, tone: "bg-warning/15 text-amber-100 ring-warning/35" },
+  { value: "submitted", label: "Submitted", student: true, tone: "bg-lens/15 text-sky-100 ring-lens/35" },
+  { value: "reviewed", label: "Reviewed", student: false, tone: "bg-violetline/20 text-violet-100 ring-violetline/45" },
+  { value: "needsRevision", label: "Needs Revision", student: false, tone: "bg-alert/15 text-red-100 ring-alert/35" },
+  { value: "finalApproved", label: "Final Approved", student: false, tone: "bg-signal/20 text-green-100 ring-signal/45" },
 ];
+const PROJECT_STATUS_VALUES = PROJECT_STATUS_PIPELINE.map((status) => status.value);
+const STUDENT_PROJECT_STATUS_VALUES = PROJECT_STATUS_PIPELINE
+  .filter((status) => status.student)
+  .map((status) => status.value);
+const TEACHER_ONLY_PROJECT_STATUS_VALUES = PROJECT_STATUS_PIPELINE
+  .filter((status) => !status.student)
+  .map((status) => status.value);
 const CURRENT_TASKS = [
   "Equipment pickup",
   "Script writing",
@@ -425,6 +443,17 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function localDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: DAILY_RECORDING_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
 function toDateLabel(value) {
   if (!value) return "No date";
   const [year, month, day] = value.split("-");
@@ -601,17 +630,6 @@ function isVideoStudent(profile) {
   return profile?.role === VIDEO_ROLES.STUDENT;
 }
 
-function projectProgress(project) {
-  const items = Array.isArray(project?.checklistItems) ? project.checklistItems : [];
-  if (!items.length) return { completed: 0, total: 0, percent: 0 };
-  const completed = items.filter((item) => item.completed).length;
-  return {
-    completed,
-    total: items.length,
-    percent: Math.round((completed / items.length) * 100),
-  };
-}
-
 function emptyChecklistProgress() {
   return { completed: 0, total: 0, percent: 0 };
 }
@@ -636,34 +654,150 @@ function progressTone(percent) {
   };
 }
 
+function checklistLabelKey(label) {
+  return safeText(label).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isRemovedChecklistItem(item) {
+  return REMOVED_CHECKLIST_LABELS.has(checklistLabelKey(typeof item === "string" ? item : item?.label));
+}
+
 function normalizeChecklist(items) {
-  return (Array.isArray(items) && items.length ? items : DEFAULT_PRODUCTION_CHECKLIST).map(
-    (item) =>
+  const source = Array.isArray(items) && items.length ? items : DEFAULT_PRODUCTION_CHECKLIST;
+  const normalized = source
+    .filter((item) => !isRemovedChecklistItem(item))
+    .map((item) =>
       typeof item === "string"
         ? {
-            id: makeId("check"),
+            id: checklistLabelKey(item) || makeId("check"),
             label: item,
             completed: false,
             completedBy: "",
             completedAt: "",
           }
         : {
-            id: item.id || makeId("check"),
+            id: item.id || checklistLabelKey(item.label) || makeId("check"),
             label: safeText(item.label) || "Untitled task",
             completed: Boolean(item.completed),
             completedBy: safeText(item.completedBy),
             completedAt: item.completedAt || "",
           },
-  );
+    );
+  return normalized.length ? normalized : normalizeChecklist(DEFAULT_PRODUCTION_CHECKLIST);
 }
 
 function checklistTemplateForProject(project) {
-  return normalizeChecklist(project?.checklistItems || DEFAULT_PRODUCTION_CHECKLIST).map((item) => ({
+  return normalizeChecklist(DEFAULT_PRODUCTION_CHECKLIST).map((item) => ({
     ...item,
     completed: false,
     completedBy: "",
     completedAt: "",
   }));
+}
+
+function normalizeDailyChecklistEntry(entry = {}) {
+  const completed = entry?.completed && typeof entry.completed === "object" ? entry.completed : {};
+  const completedBy = entry?.completedBy && typeof entry.completedBy === "object" ? entry.completedBy : {};
+  const completedAt = entry?.completedAt && typeof entry.completedAt === "object" ? entry.completedAt : {};
+  return {
+    completed,
+    completedBy,
+    completedAt,
+    completedCount: Number(entry?.completedCount) || 0,
+    totalCount: Number(entry?.totalCount) || DEFAULT_PRODUCTION_CHECKLIST.length,
+    updatedAt: entry?.updatedAt || "",
+    updatedBy: safeText(entry?.updatedBy),
+    updatedByEmail: normalizeEmail(entry?.updatedByEmail),
+  };
+}
+
+function normalizeDailyChecklists(dailyChecklists = {}) {
+  if (!dailyChecklists || typeof dailyChecklists !== "object" || Array.isArray(dailyChecklists)) return {};
+  return Object.fromEntries(
+    Object.entries(dailyChecklists)
+      .filter(([dateKey]) => /^\d{4}-\d{2}-\d{2}$/.test(dateKey))
+      .map(([dateKey, entry]) => [dateKey, normalizeDailyChecklistEntry(entry)]),
+  );
+}
+
+function checklistItemsForDate(dailyChecklists = {}, dateKey = localDateKey()) {
+  const entry = normalizeDailyChecklistEntry(dailyChecklists[dateKey]);
+  return checklistTemplateForProject().map((item) => ({
+    ...item,
+    completed: entry.completed[item.id] === true,
+    completedBy: safeText(entry.completedBy[item.id]),
+    completedAt: entry.completedAt[item.id] || "",
+  }));
+}
+
+function dailyChecklistEntryFromItems(items, profile) {
+  const normalizedItems = normalizeChecklist(items);
+  const progress = checklistProgress(normalizedItems);
+  return {
+    completed: Object.fromEntries(normalizedItems.map((item) => [item.id, item.completed === true])),
+    completedBy: Object.fromEntries(normalizedItems.map((item) => [item.id, safeText(item.completedBy)])),
+    completedAt: Object.fromEntries(normalizedItems.map((item) => [item.id, item.completedAt || ""])),
+    completedCount: progress.completed,
+    totalCount: progress.total,
+    updatedAt: serverTimestamp(),
+    updatedBy: profile?.uid || "",
+    updatedByEmail: normalizeEmail(profile?.email),
+  };
+}
+
+function normalizeProjectStatus(status) {
+  const value = safeText(status);
+  if (PROJECT_STATUS_VALUES.includes(value)) return value;
+  const legacy = value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!legacy) return "notStarted";
+  if (["notstarted", "equipmentcheck"].includes(legacy)) return "notStarted";
+  if (["writing", "scriptwriting", "planning"].includes(legacy)) return "planning";
+  if (["filming", "recording"].includes(legacy)) return "filming";
+  if (["reviewingfootage", "editing"].includes(legacy)) return "editing";
+  if (["uploading", "submitted", "complete"].includes(legacy)) return "submitted";
+  if (["reviewed"].includes(legacy)) return "reviewed";
+  if (["needsrevision"].includes(legacy)) return "needsRevision";
+  if (["finalapproved"].includes(legacy)) return "finalApproved";
+  return "notStarted";
+}
+
+function projectStatusDefinition(status) {
+  return PROJECT_STATUS_PIPELINE.find((item) => item.value === normalizeProjectStatus(status)) || PROJECT_STATUS_PIPELINE[0];
+}
+
+function projectStatusLabel(status) {
+  return projectStatusDefinition(status).label;
+}
+
+function projectStatusTone(status) {
+  return projectStatusDefinition(status).tone;
+}
+
+function projectStatusFromSubmissionStatus(status) {
+  const value = normalizeSubmissionVersionStatus(status);
+  if (value === "Reviewed") return "reviewed";
+  if (value === "Needs Revision") return "needsRevision";
+  if (value === "Final Approved") return "finalApproved";
+  return "submitted";
+}
+
+function shouldAutoAdvanceProjectStatus(currentStatus, nextStatus) {
+  const current = normalizeProjectStatus(currentStatus);
+  const next = normalizeProjectStatus(nextStatus);
+  if (TEACHER_ONLY_PROJECT_STATUS_VALUES.includes(current)) return false;
+  return PROJECT_STATUS_VALUES.indexOf(next) > PROJECT_STATUS_VALUES.indexOf(current);
+}
+
+function autoAdvanceProjectStatus(currentStatus, nextStatus) {
+  return shouldAutoAdvanceProjectStatus(currentStatus, nextStatus)
+    ? normalizeProjectStatus(nextStatus)
+    : normalizeProjectStatus(currentStatus);
+}
+
+function projectStatusOptionsForProfile(profile) {
+  return isVideoStudent(profile)
+    ? PROJECT_STATUS_PIPELINE.filter((status) => status.student)
+    : PROJECT_STATUS_PIPELINE;
 }
 
 function normalizeScriptSections(sections) {
@@ -1284,6 +1418,7 @@ function createSubmissionVersionFromCurrentState({
 }
 
 function defaultGroupWorkflow(project, periodId, group) {
+  const checklistDateKey = localDateKey();
   const checklistItems = checklistTemplateForProject(project);
   const assignedStudentEmails = Array.isArray(group?.assignedStudentEmails)
     ? group.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
@@ -1298,8 +1433,10 @@ function defaultGroupWorkflow(project, periodId, group) {
     groupName: safeText(group?.name) || "Group",
     assignedStudentEmails,
     assignedStudentNames: assignedStudentEmails.map(titleFromEmail),
-    filmingStatus: "Not started",
+    filmingStatus: "notStarted",
     currentTask: "Equipment pickup",
+    checklistDateKey,
+    dailyChecklists: {},
     checklistItems,
     checklistCompletedCount: 0,
     checklistTotal: checklistItems.length,
@@ -1343,8 +1480,9 @@ function defaultGroupWorkflow(project, periodId, group) {
 
 function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
   const base = defaultGroupWorkflow(project, periodId, group);
-  const rawChecklistItems = Array.isArray(workflow?.checklistItems) ? workflow.checklistItems : base.checklistItems;
-  const checklistItems = normalizeChecklist(rawChecklistItems);
+  const checklistDateKey = localDateKey();
+  const dailyChecklists = normalizeDailyChecklists(workflow?.dailyChecklists);
+  const checklistItems = checklistItemsForDate(dailyChecklists, checklistDateKey);
   const progress = checklistProgress(checklistItems);
   return {
     ...base,
@@ -1357,8 +1495,10 @@ function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
     groupName: safeText(group?.name || workflow?.groupName) || base.groupName,
     assignedStudentEmails: base.assignedStudentEmails,
     assignedStudentNames: base.assignedStudentNames,
-    filmingStatus: safeText(workflow?.filmingStatus) || base.filmingStatus,
+    filmingStatus: normalizeProjectStatus(workflow?.filmingStatus || base.filmingStatus),
     currentTask: safeText(workflow?.currentTask) || base.currentTask,
+    checklistDateKey,
+    dailyChecklists,
     checklistItems,
     checklistCompletedCount: progress.completed,
     checklistTotal: progress.total,
@@ -2168,10 +2308,27 @@ async function saveProjectPatch(project, profile, patch, action) {
 
 async function saveGroupWorkflow(project, periodId, group, currentWorkflow, profile, patch, action) {
   const baseWorkflow = normalizeGroupWorkflow(project, periodId, group, currentWorkflow);
-  const checklistItems = patch.checklistItems
+  const checklistDateKey = safeText(patch.checklistDateKey) || baseWorkflow.checklistDateKey || localDateKey();
+  const checklistItems = hasOwn(patch, "checklistItems")
     ? normalizeChecklist(patch.checklistItems)
     : baseWorkflow.checklistItems;
   const progress = checklistProgress(checklistItems);
+  const dailyChecklists = { ...baseWorkflow.dailyChecklists };
+  if (hasOwn(patch, "checklistItems")) {
+    dailyChecklists[checklistDateKey] = dailyChecklistEntryFromItems(checklistItems, profile);
+  }
+  let filmingStatus = hasOwn(patch, "filmingStatus")
+    ? normalizeProjectStatus(patch.filmingStatus)
+    : normalizeProjectStatus(baseWorkflow.filmingStatus);
+  if (hasOwn(patch, "planningText")) {
+    filmingStatus = autoAdvanceProjectStatus(filmingStatus, "planning");
+  }
+  if (hasOwn(patch, "checklistItems") && progress.completed > 0) {
+    filmingStatus = autoAdvanceProjectStatus(filmingStatus, "filming");
+  }
+  if (hasOwn(patch, "submissionUrl") || hasOwn(patch, "submittedAt")) {
+    filmingStatus = autoAdvanceProjectStatus(filmingStatus, "submitted");
+  }
   const periodSummary = projectPeriodSummaries(project).find((summary) => summary.id === periodId);
   const workflowId = projectGroupWorkflowId(project.id, periodId, group.id);
   const payload = {
@@ -2184,8 +2341,10 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
     groupName: group.name,
     assignedStudentEmails: group.assignedStudentEmails.map(normalizeEmail).filter(Boolean),
     assignedStudentNames: group.assignedStudentEmails.map(titleFromEmail),
-    filmingStatus: safeText(patch.filmingStatus || baseWorkflow.filmingStatus) || "Not started",
+    filmingStatus,
     currentTask: safeText(patch.currentTask || baseWorkflow.currentTask) || "Equipment pickup",
+    checklistDateKey,
+    dailyChecklists,
     checklistItems,
     checklistCompletedCount: progress.completed,
     checklistTotal: progress.total,
@@ -2402,6 +2561,7 @@ async function updateSubmissionVersionStatus(project, periodId, group, workflow,
   });
   if (version.isLatest) {
     await updateDoc(doc(db, "projectGroupWorkflows", workflowId), {
+      filmingStatus: projectStatusFromSubmissionStatus(nextStatus),
       latestSubmissionVersionId: versionId,
       latestSubmissionVersionNumber: Number(version.versionNumber) || 1,
       latestSubmissionVersionStatus: nextStatus,
@@ -2710,6 +2870,7 @@ function VideoShell({ profile, view, setView, kioskActive, children }) {
 }
 
 function MonitorDashboard({
+  profile,
   projects,
   loading,
   error,
@@ -2719,6 +2880,7 @@ function MonitorDashboard({
   workflowMap,
   selectedPeriodId,
   setSelectedPeriodId,
+  setToast,
   onPreviewPeriod,
 }) {
   const [interestIndex, setInterestIndex] = useState(0);
@@ -2892,8 +3054,10 @@ function MonitorDashboard({
                               period=${selectedPeriod}
                               group=${item.group}
                               workflow=${item.workflow}
+                              profile=${profile}
                               profileByEmail=${profileByEmail}
                               interestIndex=${interestIndex}
+                              setToast=${setToast}
                             />
                           `,
                         )}
@@ -2903,7 +3067,8 @@ function MonitorDashboard({
   `;
 }
 
-function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, interestIndex }) {
+function ProjectMonitorCard({ project, period, group, workflow, profile, profileByEmail, interestIndex, setToast }) {
+  const [statusBusy, setStatusBusy] = useState(false);
   const progress = checklistProgress(workflow.checklistItems);
   const students = group.assignedStudentEmails || [];
   const interestPool = students.flatMap((email) =>
@@ -2914,6 +3079,26 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
   const rotatingInterest = interestPool.length
     ? interestPool[interestIndex % interestPool.length]
     : "No student profile interests shared yet.";
+  const updateStatus = async (event) => {
+    const nextStatus = event.currentTarget.value;
+    setStatusBusy(true);
+    try {
+      await saveGroupWorkflow(
+        project,
+        period.id,
+        group,
+        workflow,
+        profile,
+        { filmingStatus: nextStatus },
+        `Updated ${group.name} project status to ${projectStatusLabel(nextStatus)}`,
+      );
+      setToast(`${group.name} status set to ${projectStatusLabel(nextStatus)}`);
+    } catch (statusError) {
+      setToast(statusError.message);
+    } finally {
+      setStatusBusy(false);
+    }
+  };
 
   return html`
     <article className="vp-panel vp-fade rounded-2xl p-3" style=${progressTone(progress.percent)}>
@@ -2925,10 +3110,13 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
           <h2 className="mt-1 truncate text-lg font-black text-white">${project.title}</h2>
           <p className="text-sm font-black text-lens">${group.name}</p>
           <p className="text-xs text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
+          <span className=${classNames("mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.14em] ring-1", projectStatusTone(workflow.filmingStatus))}>
+            ${projectStatusLabel(workflow.filmingStatus)}
+          </span>
         </div>
         <div className="rounded-xl bg-slate-950/50 px-2.5 py-2 text-right ring-1 ring-white/10">
-          <p className="text-xl font-black text-white">${progress.percent}%</p>
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">complete</p>
+          <p className="text-xl font-black text-white">${progress.completed}/${progress.total}</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">today</p>
         </div>
       </div>
 
@@ -2943,14 +3131,28 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Status</p>
-            <p className="mt-0.5 font-black text-white">${workflow.filmingStatus || "Not started"}</p>
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Project Status</p>
+            <${Select}
+              value=${normalizeProjectStatus(workflow.filmingStatus)}
+              disabled=${statusBusy}
+              onChange=${updateStatus}
+              className="mt-1 py-2 text-xs"
+            >
+              ${PROJECT_STATUS_PIPELINE.map(
+                (status) => html`<option key=${status.value} value=${status.value}>${status.label}</option>`,
+              )}
+            </${Select}>
           </div>
           <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Latest activity</p>
             <p className="mt-0.5 font-black text-white">${timestampLabel(workflow.updatedAt)}</p>
           </div>
         </div>
+      </div>
+
+      <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
+        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Daily Recording Checklist</p>
+        <p className="mt-0.5 font-black text-white">${progress.completed}/${progress.total} complete today</p>
       </div>
 
       <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
@@ -3307,6 +3509,7 @@ function GradeSubmissionCard({ project, period, group, workflow, versions = [], 
           gradedByEmail: normalizeEmail(profile.email),
           gradedSubmissionVersionId: selectedVersion?.id || "",
           gradedSubmissionVersionNumber: selectedVersion?.versionNumber || 0,
+          filmingStatus: autoAdvanceProjectStatus(workflow.filmingStatus, "reviewed"),
           unit: getProjectUnit(project),
         },
         `Saved grade for ${group.name}`,
@@ -3334,6 +3537,27 @@ function GradeSubmissionCard({ project, period, group, workflow, versions = [], 
     }
   };
 
+  const updateProjectStatus = async (event) => {
+    const nextStatus = event.currentTarget.value;
+    setStatusBusy(true);
+    try {
+      await saveGroupWorkflow(
+        project,
+        period.id,
+        group,
+        workflow,
+        profile,
+        { filmingStatus: nextStatus },
+        `Updated ${group.name} project status to ${projectStatusLabel(nextStatus)}`,
+      );
+      setToast(`${group.name} status set to ${projectStatusLabel(nextStatus)}`);
+    } catch (statusError) {
+      setToast(statusError.message);
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
   return html`
     <article className="vp-panel rounded-3xl p-4 sm:p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -3351,6 +3575,9 @@ function GradeSubmissionCard({ project, period, group, workflow, versions = [], 
         <div className="flex flex-wrap gap-2">
           <${Badge} icon=${submitted ? FileText : AlertTriangle}>${submitted ? selectedVersion?.status || "Submitted" : "Missing submission"}</${Badge}>
           <${Badge} icon=${graded ? CheckCircle2 : Circle}>${graded ? "Graded" : "Ungraded"}</${Badge}>
+          <${Badge} icon=${Gauge} className=${projectStatusTone(workflow.filmingStatus)}>
+            ${projectStatusLabel(workflow.filmingStatus)}
+          </${Badge}>
         </div>
       </div>
 
@@ -3381,7 +3608,19 @@ function GradeSubmissionCard({ project, period, group, workflow, versions = [], 
               : null}
           </div>
           <div className="mb-3 grid gap-3 rounded-2xl border border-slate-700/70 bg-slate-950/45 p-3">
-            <div className="grid gap-3 md:grid-cols-[1fr_0.7fr]">
+            <div className="grid gap-3 lg:grid-cols-[0.75fr_1fr_0.7fr]">
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Current Project Status
+                <${Select}
+                  value=${normalizeProjectStatus(workflow.filmingStatus)}
+                  disabled=${statusBusy}
+                  onChange=${updateProjectStatus}
+                >
+                  ${PROJECT_STATUS_PIPELINE.map(
+                    (status) => html`<option key=${status.value} value=${status.value}>${status.label}</option>`,
+                  )}
+                </${Select}>
+              </label>
               <label className="grid gap-1 text-sm font-bold text-slate-300">
                 Submission Versions
                 <${Select}
@@ -4822,7 +5061,7 @@ function ProjectCreateForm({ profile, periods, enrollments, setToast }) {
           (assignedTeacherEmail === profile.email ? profile.displayName : titleFromEmail(assignedTeacherEmail)),
         teacherNotes: safeText(form.teacherNotes),
         status: "active",
-        filmingStatus: "Not started",
+        filmingStatus: "notStarted",
         currentTask: "Equipment pickup",
         checklistItems: normalizeChecklist(DEFAULT_PRODUCTION_CHECKLIST),
         scriptSections: normalizeScriptSections([]),
@@ -5354,7 +5593,6 @@ function PeriodScopedGroupManager({ profile, project, periods, enrollments, setT
 }
 
 function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, periods, enrollments }) {
-  const progress = projectProgress(project);
   const [busy, setBusy] = useState("");
   const periodSummaries = projectPeriodSummaries(project, periods);
   const periodCount = periodSummaries.length;
@@ -5399,7 +5637,7 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, period
             ${projectPeriodLabel(project, periods)} - ${projectUnitLabel(project)} - Due ${toDateLabel(project.dueDate)}
           </p>
         </div>
-        <${Badge} icon=${Gauge}>${progress.percent}%</${Badge}>
+        <${Badge} icon=${Radio}>${project.status}</${Badge}>
       </div>
       <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-300">${project.objective}</p>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -5414,9 +5652,6 @@ function ProjectAdminCard({ profile, project, setToast, onPreviewStudent, period
         <${Badge} icon=${Users}>${studentCount} students</${Badge}>
         <${Badge} icon=${UserCog}>${project.assignedTeacherEmail}</${Badge}>
         <${Badge} icon=${Radio}>${project.status}</${Badge}>
-      </div>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-950/70">
-        <div className="h-full rounded-full bg-lens" style=${{ width: `${progress.percent}%` }}></div>
       </div>
       <${PeriodScopedGroupManager}
         profile=${profile}
@@ -5912,6 +6147,16 @@ function FilmingWorkspace({
   }, [scriptDraft, scriptDirty, project.id]);
 
   const progress = activeWorkflow ? checklistProgress(activeWorkflow.checklistItems) : emptyChecklistProgress();
+  const projectStatusOptions = activeWorkflow
+    ? [
+        ...(!projectStatusOptionsForProfile(profile).some(
+          (status) => status.value === normalizeProjectStatus(activeWorkflow.filmingStatus),
+        )
+          ? [projectStatusDefinition(activeWorkflow.filmingStatus)]
+          : []),
+        ...projectStatusOptionsForProfile(profile),
+      ]
+    : projectStatusOptionsForProfile(profile);
 
   const toggleChecklist = async (itemId) => {
     if (!activeGroup || !activeWorkflow) return;
@@ -6092,12 +6337,22 @@ function FilmingWorkspace({
             <p className="mt-1 font-black text-white">${activeGroup.name}</p>
           </div>
           <label className="grid gap-1 text-xs font-black uppercase tracking-[0.18em] text-slate-500">
-            Status
+            Project Status
             <${Select}
-              value=${activeWorkflow.filmingStatus || "Not started"}
+              value=${normalizeProjectStatus(activeWorkflow.filmingStatus)}
               onChange=${(event) => updateFilmingField("filmingStatus", event.currentTarget.value)}
             >
-              ${FILMING_STATUSES.map((status) => html`<option key=${status} value=${status}>${status}</option>`)}
+              ${projectStatusOptions.map(
+                (status) => html`
+                  <option
+                    key=${status.value}
+                    value=${status.value}
+                    disabled=${isVideoStudent(profile) && !status.student}
+                  >
+                    ${status.label}
+                  </option>
+                `,
+              )}
             </${Select}>
           </label>
           <label className="grid gap-1 text-xs font-black uppercase tracking-[0.18em] text-slate-500">
@@ -6127,8 +6382,8 @@ function FilmingWorkspace({
 
         <div className="mt-4">
           <div className="mb-2 flex items-center justify-between text-sm font-black text-white">
-            <span>Checklist progress</span>
-            <span>${progress.completed}/${progress.total} - ${progress.percent}%</span>
+            <span>Daily checklist progress</span>
+            <span>Today - ${progress.completed}/${progress.total} - ${progress.percent}%</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-slate-950/70 ring-1 ring-slate-700/70">
             <div className="h-full rounded-full bg-signal transition-all duration-500" style=${{ width: `${progress.percent}%` }}></div>
@@ -6157,7 +6412,11 @@ function FilmingWorkspace({
       />
 
       <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-        <${ProductionChecklist} items=${activeWorkflow.checklistItems} onToggle=${toggleChecklist} />
+        <${ProductionChecklist}
+          items=${activeWorkflow.checklistItems}
+          dateKey=${activeWorkflow.checklistDateKey}
+          onToggle=${toggleChecklist}
+        />
         <${ScriptWritingPanel}
           sections=${scriptDraft}
           saving=${scriptSaving}
@@ -6545,15 +6804,15 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, versions =
   `;
 }
 
-function ProductionChecklist({ items, onToggle }) {
+function ProductionChecklist({ items, dateKey, onToggle }) {
   return html`
     <section className="vp-panel rounded-3xl p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-black text-white">Production Checklist</h2>
-          <p className="text-sm text-slate-400">Touch each task as the crew finishes it.</p>
+          <h2 className="text-lg font-black text-white">Daily Recording Checklist</h2>
+          <p className="text-sm text-slate-400">Today's checklist - ${dateKey || localDateKey()}</p>
         </div>
-        <${Badge} icon=${ListChecks}>Live</${Badge}>
+        <${Badge} icon=${ListChecks}>Daily</${Badge}>
       </div>
       <div className="grid gap-2">
         ${items.map(
@@ -7386,6 +7645,7 @@ function VideoProductionApp() {
   } else if (activeView === "monitor" && (isVideoTeacher(profile) || isVideoAdmin(profile))) {
     content = html`
       <${MonitorDashboard}
+        profile=${profile}
         projects=${projects}
         loading=${projectsLoading}
         error=${projectsError || periodsError || enrollmentsError || profilesError || workflowsError}
@@ -7395,6 +7655,7 @@ function VideoProductionApp() {
         workflowMap=${projectGroupWorkflows}
         selectedPeriodId=${selectedPeriodId}
         setSelectedPeriodId=${setSelectedPeriodId}
+        setToast=${setToast}
         onPreviewPeriod=${(periodId) => {
           setPreviewProjectId("");
           setPreviewPeriodId(periodId);
