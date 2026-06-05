@@ -3139,10 +3139,8 @@ function MonitorDashboard({
                               period=${selectedPeriod}
                               group=${item.group}
                               workflow=${item.workflow}
-                              profile=${profile}
                               profileByEmail=${profileByEmail}
                               interestIndex=${interestIndex}
-                              setToast=${setToast}
                             />
                           `,
                         )}
@@ -3170,9 +3168,7 @@ function MonitorProgressBar({ label, valueLabel, percent, barClass }) {
   `;
 }
 
-function ProjectMonitorCard({ project, period, group, workflow, profile, profileByEmail, interestIndex, setToast }) {
-  const [statusBusy, setStatusBusy] = useState(false);
-  const checklistProgressValue = checklistProgress(workflow.checklistItems);
+function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, interestIndex }) {
   const statusProgress = getProjectStatusProgress(workflow.filmingStatus);
   const statusTheme = getProjectStatusTheme(workflow.filmingStatus);
   const students = group.assignedStudentEmails || [];
@@ -3184,26 +3180,6 @@ function ProjectMonitorCard({ project, period, group, workflow, profile, profile
   const rotatingInterest = interestPool.length
     ? interestPool[interestIndex % interestPool.length]
     : "No student profile interests shared yet.";
-  const updateStatus = async (event) => {
-    const nextStatus = event.currentTarget.value;
-    setStatusBusy(true);
-    try {
-      await saveGroupWorkflow(
-        project,
-        period.id,
-        group,
-        workflow,
-        profile,
-        { filmingStatus: nextStatus },
-        `Updated ${group.name} project status to ${projectStatusLabel(nextStatus)}`,
-      );
-      setToast(`${group.name} status set to ${projectStatusLabel(nextStatus)}`);
-    } catch (statusError) {
-      setToast(statusError.message);
-    } finally {
-      setStatusBusy(false);
-    }
-  };
 
   return html`
     <article
@@ -3238,12 +3214,6 @@ function ProjectMonitorCard({ project, period, group, workflow, profile, profile
           percent=${statusProgress.percent}
           barClass=${statusTheme.bar}
         />
-        <${MonitorProgressBar}
-          label="Daily Recording Checklist"
-          valueLabel=${`${checklistProgressValue.completed}/${checklistProgressValue.total} - ${checklistProgressValue.percent}% today`}
-          percent=${checklistProgressValue.percent}
-          barClass="bg-white"
-        />
       </div>
 
       <div className="mt-3 grid gap-2 text-sm text-slate-300">
@@ -3251,34 +3221,6 @@ function ProjectMonitorCard({ project, period, group, workflow, profile, profile
           <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Current task</p>
           <p className="mt-0.5 font-black text-white">${workflow.currentTask || "Equipment pickup"}</p>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Project Status</p>
-            <${Select}
-              value=${normalizeProjectStatus(workflow.filmingStatus)}
-              disabled=${statusBusy}
-              onChange=${updateStatus}
-              className="mt-1 py-2 text-xs"
-            >
-              ${PROJECT_STATUS_PIPELINE.map(
-                (status) => html`<option key=${status.value} value=${status.value}>${status.label}</option>`,
-              )}
-            </${Select}>
-          </div>
-          <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Latest activity</p>
-            <p className="mt-0.5 font-black text-white">${timestampLabel(workflow.updatedAt)}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
-        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Daily Recording Checklist</p>
-        <p className="mt-0.5 font-black text-white">
-          ${checklistProgressValue.total
-            ? `${checklistProgressValue.completed}/${checklistProgressValue.total} complete today`
-            : "No daily checklist items today"}
-        </p>
       </div>
 
       <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">

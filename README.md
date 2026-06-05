@@ -48,4 +48,4 @@ Video Production submissions support version history. Each explicit student subm
 
 Video Production groups now use a Project Status Pipeline tracked per project, period, and group: Not Started, Planning, Filming, Editing, Submitted, Reviewed, Needs Revision, and Final Approved. The checklist in the student workflow is a Daily Recording Checklist, resets by `YYYY-MM-DD` using the school/local `America/Los_Angeles` date key, and no longer includes project-milestone items such as script finalized, shot-list completed, intro/interview/B-roll/outro filmed.
 
-Teacher Monitor shows two separate progress bars for each group: a 7-step Project Status meter where Planning is 1/7 and Final Approved is 7/7, plus today's Daily Recording Checklist meter. Group card color is based on Project Status only, while checklist progress remains daily and separate.
+Teacher Monitor shows a read-only 7-step Project Status meter for each group, where Planning is 1/7 and Final Approved is 7/7. Group card color is based on Project Status, and the Monitor card does not include status editing, latest activity, or daily checklist sections.
