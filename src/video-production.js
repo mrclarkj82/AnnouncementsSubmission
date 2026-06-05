@@ -159,6 +159,8 @@ const VIDEO_PRODUCTION_RUBRIC = [
 
 const PROJECT_STATUSES = ["active", "paused", "complete", "archived"];
 const PROJECT_UNITS = [1, 2, 3, 4];
+const SUBMISSION_VERSION_LABELS = ["Version", "Draft Cut", "Revision", "Final Cut"];
+const SUBMISSION_VERSION_STATUSES = ["Submitted", "Reviewed", "Needs Revision", "Final Approved"];
 const FILMING_STATUSES = [
   "Not started",
   "Equipment check",
@@ -1064,6 +1066,223 @@ function hasWorkflowGrade(workflow) {
   );
 }
 
+function getSubmissionVersionScope(projectId, periodId, groupId) {
+  return projectGroupWorkflowId(projectId, periodId, groupId);
+}
+
+function getSubmissionVersionId(projectId, periodId, groupId, versionNumber) {
+  return `version-${String(Math.max(1, Number(versionNumber) || 1)).padStart(3, "0")}`;
+}
+
+function normalizeSubmissionVersionStatus(status) {
+  const value = safeText(status);
+  return SUBMISSION_VERSION_STATUSES.includes(value) ? value : "Submitted";
+}
+
+function normalizeSubmissionVersionLabel(label, versionNumber = 1) {
+  const value = safeText(label);
+  if (SUBMISSION_VERSION_LABELS.includes(value) && value !== "Version") return value;
+  return `Version ${Math.max(1, Number(versionNumber) || 1)}`;
+}
+
+function normalizeSubmissionVersion(rawVersion = {}, workflow = null) {
+  const versionNumber = Math.max(1, Number(rawVersion.versionNumber) || 1);
+  const versionId =
+    safeText(rawVersion.versionId) ||
+    safeText(rawVersion.id) ||
+    getSubmissionVersionId(rawVersion.projectId || workflow?.projectId, rawVersion.periodId || workflow?.periodId, rawVersion.groupId || workflow?.groupId, versionNumber);
+  const studentSelfAssessment = normalizeRubricScores(rawVersion.studentSelfAssessment);
+  return {
+    id: versionId,
+    versionId,
+    workflowId: safeText(rawVersion.workflowId || workflow?.id),
+    projectId: safeText(rawVersion.projectId || workflow?.projectId),
+    periodId: safeText(rawVersion.periodId || workflow?.periodId),
+    groupId: safeText(rawVersion.groupId || workflow?.groupId),
+    unit: Number(rawVersion.unit) || Number(workflow?.unit) || 1,
+    projectTitle: safeText(rawVersion.projectTitle || workflow?.projectTitle),
+    periodName: safeText(rawVersion.periodName || workflow?.periodName),
+    groupName: safeText(rawVersion.groupName || workflow?.groupName),
+    assignedStudentEmails: Array.isArray(rawVersion.assignedStudentEmails)
+      ? rawVersion.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+      : Array.isArray(workflow?.assignedStudentEmails)
+        ? workflow.assignedStudentEmails.map(normalizeEmail).filter(Boolean)
+        : [],
+    versionNumber,
+    versionLabel: normalizeSubmissionVersionLabel(rawVersion.versionLabel, versionNumber),
+    status: normalizeSubmissionVersionStatus(rawVersion.status),
+    submissionUrl: normalizeGoogleDriveUrl(rawVersion.submissionUrl) || safeText(rawVersion.submissionUrl),
+    submissionType: safeText(rawVersion.submissionType) || "googleDrive",
+    planningText: safeText(rawVersion.planningText),
+    studentSelfAssessment,
+    studentSelfAssessmentTotal:
+      Number(rawVersion.studentSelfAssessmentTotal) || calculateRubricTotal(studentSelfAssessment),
+    studentSubmissionNote: safeText(rawVersion.studentSubmissionNote),
+    submittedAt: rawVersion.submittedAt || "",
+    submittedBy: safeText(rawVersion.submittedBy),
+    submittedByName: safeText(rawVersion.submittedByName),
+    submittedByEmail: normalizeEmail(rawVersion.submittedByEmail),
+    isLatest: rawVersion.isLatest === true,
+    isFinal: rawVersion.isFinal === true || normalizeSubmissionVersionStatus(rawVersion.status) === "Final Approved",
+    gradedSubmissionVersionId: safeText(rawVersion.gradedSubmissionVersionId),
+    reviewedSubmissionVersionId: safeText(rawVersion.reviewedSubmissionVersionId),
+    createdAt: rawVersion.createdAt || "",
+    updatedAt: rawVersion.updatedAt || "",
+    teacherStatusUpdatedAt: rawVersion.teacherStatusUpdatedAt || "",
+    teacherStatusUpdatedBy: safeText(rawVersion.teacherStatusUpdatedBy),
+    teacherStatusUpdatedByEmail: normalizeEmail(rawVersion.teacherStatusUpdatedByEmail),
+    isLegacy: rawVersion.isLegacy === true,
+  };
+}
+
+function createLegacySubmissionVersion(workflow) {
+  if (!hasSubmittedWorkflow(workflow)) return null;
+  const fallbackSubmitterEmail = normalizeEmail(workflow.submittedByEmail || workflow.assignedStudentEmails?.[0]);
+  return normalizeSubmissionVersion(
+    {
+      id: getSubmissionVersionId(workflow.projectId, workflow.periodId, workflow.groupId, 1),
+      versionId: getSubmissionVersionId(workflow.projectId, workflow.periodId, workflow.groupId, 1),
+      workflowId: workflow.id,
+      projectId: workflow.projectId,
+      periodId: workflow.periodId,
+      groupId: workflow.groupId,
+      unit: workflow.unit,
+      projectTitle: workflow.projectTitle,
+      periodName: workflow.periodName,
+      groupName: workflow.groupName,
+      assignedStudentEmails: workflow.assignedStudentEmails,
+      versionNumber: 1,
+      versionLabel: "Version 1",
+      status: workflow.latestSubmissionVersionStatus || "Submitted",
+      submissionUrl: workflow.submissionUrl,
+      submissionType: workflow.submissionType || "googleDrive",
+      planningText: workflow.planningText,
+      studentSelfAssessment: workflow.studentSelfAssessment,
+      studentSelfAssessmentTotal: workflow.studentSelfAssessmentTotal,
+      studentSubmissionNote: workflow.studentSubmissionNote,
+      submittedAt: workflow.submittedAt,
+      submittedBy: workflow.submittedBy,
+      submittedByName: workflow.submittedByName || titleFromEmail(fallbackSubmitterEmail),
+      submittedByEmail: fallbackSubmitterEmail,
+      isLatest: true,
+      isLegacy: true,
+      createdAt: workflow.submittedAt,
+      updatedAt: workflow.submittedAt,
+    },
+    workflow,
+  );
+}
+
+function normalizeSubmissionVersions(rawVersions = [], workflow = null) {
+  const versions = (Array.isArray(rawVersions) ? rawVersions : [])
+    .map((version) => normalizeSubmissionVersion(version, workflow))
+    .filter((version) => version.submissionUrl)
+    .sort((a, b) => a.versionNumber - b.versionNumber);
+  if (!versions.length) {
+    const legacyVersion = createLegacySubmissionVersion(workflow);
+    return legacyVersion ? [legacyVersion] : [];
+  }
+  const latestNumber = Math.max(...versions.map((version) => version.versionNumber));
+  return versions.map((version) => ({
+    ...version,
+    isLatest: version.versionNumber === latestNumber,
+  }));
+}
+
+function getLatestSubmissionVersion(versions = []) {
+  const normalized = normalizeSubmissionVersions(versions);
+  if (!normalized.length) return null;
+  return normalized.reduce((latest, version) =>
+    version.versionNumber >= latest.versionNumber ? version : latest,
+  normalized[0]);
+}
+
+function getNextSubmissionVersionNumber(versions = []) {
+  const normalized = normalizeSubmissionVersions(versions);
+  if (!normalized.length) return 1;
+  return Math.max(...normalized.map((version) => version.versionNumber)) + 1;
+}
+
+function markLatestSubmissionVersion(versions = [], newVersionId = "") {
+  return normalizeSubmissionVersions(versions).map((version) => ({
+    ...version,
+    isLatest: version.versionId === newVersionId || version.id === newVersionId,
+  }));
+}
+
+function formatSubmissionVersionLabel(version) {
+  if (!version) return "No submitted version";
+  const label = safeText(version.versionLabel) || `Version ${version.versionNumber}`;
+  return label.startsWith("Version ") ? label : `${label} - Version ${version.versionNumber}`;
+}
+
+function getVersionDisplayName(version) {
+  if (!version) return "No version selected";
+  const badges = [
+    formatSubmissionVersionLabel(version),
+    version.isFinal ? "Final" : version.status,
+    version.isLatest ? "Latest" : "",
+  ].filter(Boolean);
+  return badges.join(" - ");
+}
+
+function createSubmissionVersionFromCurrentState({
+  project,
+  periodId,
+  group,
+  workflow,
+  profile,
+  versionNumber,
+  versionLabel,
+  planningText,
+  studentSelfAssessment,
+  studentSubmissionNote,
+  submittedAt = null,
+  isLatest = true,
+  isLegacy = false,
+}) {
+  const workflowId = getSubmissionVersionScope(project.id, periodId, group.id);
+  const versionId = getSubmissionVersionId(project.id, periodId, group.id, versionNumber);
+  const normalizedSelfAssessment = normalizeRubricScores(studentSelfAssessment);
+  const periodSummary = projectPeriodSummaries(project).find((summary) => summary.id === periodId);
+  return {
+    id: versionId,
+    versionId,
+    workflowId,
+    projectId: project.id,
+    periodId,
+    groupId: group.id,
+    unit: getProjectUnit(project),
+    projectTitle: safeText(project.title),
+    periodName: periodSummary?.periodName || workflow.periodName || project.periodName || "",
+    groupName: safeText(group.name),
+    assignedStudentEmails: group.assignedStudentEmails.map(normalizeEmail).filter(Boolean),
+    versionNumber,
+    versionLabel: normalizeSubmissionVersionLabel(versionLabel, versionNumber),
+    status: "Submitted",
+    submissionUrl: normalizeGoogleDriveUrl(workflow.submissionUrl) || safeText(workflow.submissionUrl),
+    submissionType: "googleDrive",
+    planningText: safeText(planningText),
+    studentSelfAssessment: normalizedSelfAssessment,
+    studentSelfAssessmentTotal: calculateRubricTotal(normalizedSelfAssessment),
+    studentSubmissionNote: safeText(studentSubmissionNote),
+    submittedAt: submittedAt || serverTimestamp(),
+    submittedBy: profile.uid || "",
+    submittedByName: safeText(profile.displayName) || titleFromEmail(profile.email),
+    submittedByEmail: normalizeEmail(profile.email),
+    isLatest,
+    isFinal: safeText(versionLabel) === "Final Cut",
+    gradedSubmissionVersionId: "",
+    reviewedSubmissionVersionId: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    teacherStatusUpdatedAt: "",
+    teacherStatusUpdatedBy: "",
+    teacherStatusUpdatedByEmail: "",
+    isLegacy,
+  };
+}
+
 function defaultGroupWorkflow(project, periodId, group) {
   const checklistItems = checklistTemplateForProject(project);
   const assignedStudentEmails = Array.isArray(group?.assignedStudentEmails)
@@ -1088,6 +1307,7 @@ function defaultGroupWorkflow(project, periodId, group) {
     submissionType: "googleDrive",
     submittedAt: "",
     submittedBy: "",
+    submittedByName: "",
     submittedByEmail: "",
     planningText: "",
     studentSelfAssessment: normalizeRubricScores({}),
@@ -1095,6 +1315,12 @@ function defaultGroupWorkflow(project, periodId, group) {
     studentSelfAssessmentUpdatedAt: "",
     studentSelfAssessmentUpdatedBy: "",
     studentSelfAssessmentUpdatedByEmail: "",
+    studentSubmissionNote: "",
+    latestSubmissionVersionId: "",
+    latestSubmissionVersionNumber: 0,
+    latestSubmissionVersionStatus: "",
+    gradedSubmissionVersionId: "",
+    gradedSubmissionVersionNumber: 0,
     teacherRubricScores: normalizeRubricScores({}),
     teacherRubricComplete: normalizeRubricComplete({}),
     teacherRubricTotal: 0,
@@ -1140,6 +1366,7 @@ function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
     submissionType: safeText(workflow?.submissionType) || base.submissionType,
     submittedAt: workflow?.submittedAt || "",
     submittedBy: safeText(workflow?.submittedBy),
+    submittedByName: safeText(workflow?.submittedByName),
     submittedByEmail: normalizeEmail(workflow?.submittedByEmail),
     planningText: safeText(workflow?.planningText),
     studentSelfAssessment: normalizeRubricScores(workflow?.studentSelfAssessment),
@@ -1147,6 +1374,14 @@ function normalizeGroupWorkflow(project, periodId, group, workflow = null) {
     studentSelfAssessmentUpdatedAt: workflow?.studentSelfAssessmentUpdatedAt || "",
     studentSelfAssessmentUpdatedBy: safeText(workflow?.studentSelfAssessmentUpdatedBy),
     studentSelfAssessmentUpdatedByEmail: normalizeEmail(workflow?.studentSelfAssessmentUpdatedByEmail),
+    studentSubmissionNote: safeText(workflow?.studentSubmissionNote),
+    latestSubmissionVersionId: safeText(workflow?.latestSubmissionVersionId),
+    latestSubmissionVersionNumber: Number(workflow?.latestSubmissionVersionNumber) || 0,
+    latestSubmissionVersionStatus: hasSubmittedWorkflow(workflow)
+      ? normalizeSubmissionVersionStatus(workflow?.latestSubmissionVersionStatus)
+      : "",
+    gradedSubmissionVersionId: safeText(workflow?.gradedSubmissionVersionId),
+    gradedSubmissionVersionNumber: Number(workflow?.gradedSubmissionVersionNumber) || 0,
     teacherRubricScores: normalizeRubricScores(workflow?.teacherRubricScores),
     teacherRubricComplete: normalizeRubricComplete(workflow?.teacherRubricComplete, workflow?.teacherRubricScores),
     teacherRubricTotal: calculateRubricTotal(workflow?.teacherRubricScores),
@@ -1749,6 +1984,76 @@ function useProjectGroupWorkflows(profile, projects = []) {
   return { workflows, loading, error };
 }
 
+function useSubmissionVersions(profile, projects = []) {
+  const [versionMap, setVersionMap] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const projectSignature = JSON.stringify(
+    projects.map((project) => ({
+      id: project.id,
+      periodId: project.periodId,
+      periodIds: project.periodIds,
+      groups: project.groups,
+      groupsByPeriod: project.groupsByPeriod,
+    })),
+  );
+
+  useEffect(() => {
+    if (!hasVideoAccess(profile)) {
+      setVersionMap({});
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    const studentEmail = normalizeEmail(profile?.email);
+    const contexts = projects.flatMap((project) =>
+      workflowContextsForProject(project).filter((context) => {
+        if (isVideoAdmin(profile) || isVideoTeacher(profile)) return true;
+        return context.group.assignedStudentEmails.map(normalizeEmail).includes(studentEmail);
+      }),
+    );
+
+    if (!contexts.length) {
+      setVersionMap({});
+      setError("");
+      setLoading(false);
+      return undefined;
+    }
+
+    setLoading(true);
+    const buckets = new Map();
+    let remainingInitialSnapshots = contexts.length;
+    const publish = () => {
+      setVersionMap(Object.fromEntries(buckets.entries()));
+      setError("");
+      remainingInitialSnapshots = Math.max(0, remainingInitialSnapshots - 1);
+      if (remainingInitialSnapshots === 0) setLoading(false);
+    };
+
+    const unsubscribes = contexts.map((context) =>
+      onSnapshot(
+        collection(db, "projectGroupWorkflows", context.workflowId, "submissionVersions"),
+        (snapshot) => {
+          const versions = snapshot.docs
+            .map((item) => ({ id: item.id, ...item.data() }))
+            .sort((a, b) => (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0));
+          buckets.set(context.workflowId, versions);
+          publish();
+        },
+        (snapshotError) => {
+          setError(snapshotError.message);
+          setLoading(false);
+        },
+      ),
+    );
+
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [profile?.email, profile?.role, projectSignature]);
+
+  return { versionMap, loading, error };
+}
+
 function useVideoUsers(enabled) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1891,10 +2196,15 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
   [
     "submissionType",
     "submittedBy",
+    "submittedByName",
     "submittedByEmail",
     "planningText",
     "studentSelfAssessmentUpdatedBy",
     "studentSelfAssessmentUpdatedByEmail",
+    "studentSubmissionNote",
+    "latestSubmissionVersionId",
+    "latestSubmissionVersionStatus",
+    "gradedSubmissionVersionId",
     "score",
     "maxScore",
     "letterGrade",
@@ -1928,6 +2238,9 @@ async function saveGroupWorkflow(project, periodId, group, currentWorkflow, prof
   ["submittedAt", "studentSelfAssessmentUpdatedAt", "gradedAt"].forEach((field) => {
     if (hasOwn(patch, field)) payload[field] = patch[field];
   });
+  ["latestSubmissionVersionNumber", "gradedSubmissionVersionNumber"].forEach((field) => {
+    if (hasOwn(patch, field)) payload[field] = Number(patch[field]) || 0;
+  });
   if (hasOwn(patch, "unit")) payload.unit = getProjectUnit({ unit: patch.unit });
 
   await setDoc(doc(db, "projectGroupWorkflows", workflowId), payload, { merge: true });
@@ -1955,6 +2268,149 @@ async function saveProjectGroupPrivateNote(project, periodId, group, profile, pr
     },
     { merge: true },
   );
+}
+
+async function submitGroupWorkflowVersion({
+  project,
+  periodId,
+  group,
+  workflow,
+  profile,
+  submissionUrl,
+  planningText,
+  studentSelfAssessment,
+  studentSubmissionNote,
+  versionLabel,
+}) {
+  const workflowId = getSubmissionVersionScope(project.id, periodId, group.id);
+  await saveGroupWorkflow(
+    project,
+    periodId,
+    group,
+    workflow,
+    profile,
+    { unit: getProjectUnit(project) },
+    "",
+  );
+  const versionsRef = collection(db, "projectGroupWorkflows", workflowId, "submissionVersions");
+  const snapshot = await getDocs(versionsRef);
+  const actualVersions = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const existingVersions = normalizeSubmissionVersions(actualVersions, workflow);
+
+  if (!actualVersions.length && hasSubmittedWorkflow(workflow)) {
+    const legacyVersion = createLegacySubmissionVersion(workflow);
+    if (legacyVersion) {
+      await setDoc(
+        doc(versionsRef, legacyVersion.id),
+        {
+          ...legacyVersion,
+          isLatest: false,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+  }
+
+  const nextVersionNumber =
+    actualVersions.length || hasSubmittedWorkflow(workflow)
+      ? getNextSubmissionVersionNumber(existingVersions)
+      : 1;
+  const normalizedUrl = normalizeGoogleDriveUrl(submissionUrl) || safeText(submissionUrl);
+  const normalizedSelfAssessment = normalizeRubricScores(studentSelfAssessment);
+  const submittedAt = serverTimestamp();
+  const versionWorkflow = {
+    ...workflow,
+    submissionUrl: normalizedUrl,
+    planningText: safeText(planningText),
+    studentSelfAssessment: normalizedSelfAssessment,
+    studentSelfAssessmentTotal: calculateRubricTotal(normalizedSelfAssessment),
+  };
+  const newVersion = createSubmissionVersionFromCurrentState({
+    project,
+    periodId,
+    group,
+    workflow: versionWorkflow,
+    profile,
+    versionNumber: nextVersionNumber,
+    versionLabel,
+    planningText,
+    studentSelfAssessment: normalizedSelfAssessment,
+    studentSubmissionNote,
+    submittedAt,
+    isLatest: true,
+  });
+
+  await setDoc(doc(versionsRef, newVersion.id), newVersion, { merge: false });
+  await saveGroupWorkflow(
+    project,
+    periodId,
+    group,
+    workflow,
+    profile,
+    {
+      submissionUrl: normalizedUrl,
+      submissionType: "googleDrive",
+      submittedAt,
+      submittedBy: profile.uid || "",
+      submittedByName: safeText(profile.displayName) || titleFromEmail(profile.email),
+      submittedByEmail: normalizeEmail(profile.email),
+      planningText: safeText(planningText),
+      studentSelfAssessment: normalizedSelfAssessment,
+      studentSelfAssessmentTotal: calculateRubricTotal(normalizedSelfAssessment),
+      studentSelfAssessmentUpdatedAt: submittedAt,
+      studentSelfAssessmentUpdatedBy: profile.uid || "",
+      studentSelfAssessmentUpdatedByEmail: normalizeEmail(profile.email),
+      studentSubmissionNote: safeText(studentSubmissionNote),
+      latestSubmissionVersionId: newVersion.id,
+      latestSubmissionVersionNumber: nextVersionNumber,
+      latestSubmissionVersionStatus: "Submitted",
+      unit: getProjectUnit(project),
+    },
+    `Submitted ${getVersionDisplayName(newVersion)} for ${group.name}`,
+  );
+
+  return newVersion;
+}
+
+async function updateSubmissionVersionStatus(project, periodId, group, workflow, version, profile, status) {
+  const nextStatus = normalizeSubmissionVersionStatus(status);
+  const workflowId = getSubmissionVersionScope(project.id, periodId, group.id);
+  const versionId = version.id || getSubmissionVersionId(project.id, periodId, group.id, version.versionNumber);
+  const versionRef = doc(db, "projectGroupWorkflows", workflowId, "submissionVersions", versionId);
+  if (version.isLegacy) {
+    await setDoc(
+      versionRef,
+      {
+        ...version,
+        id: versionId,
+        versionId,
+        workflowId,
+        isLegacy: true,
+        createdAt: version.createdAt || serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+  await updateDoc(versionRef, {
+    status: nextStatus,
+    isFinal: nextStatus === "Final Approved" || version.versionLabel === "Final Cut",
+    teacherStatusUpdatedAt: serverTimestamp(),
+    teacherStatusUpdatedBy: profile.uid || "",
+    teacherStatusUpdatedByEmail: normalizeEmail(profile.email),
+    updatedAt: serverTimestamp(),
+  });
+  if (version.isLatest) {
+    await updateDoc(doc(db, "projectGroupWorkflows", workflowId), {
+      latestSubmissionVersionId: versionId,
+      latestSubmissionVersionNumber: Number(version.versionNumber) || 1,
+      latestSubmissionVersionStatus: nextStatus,
+      updatedAt: serverTimestamp(),
+      updatedBy: profile.uid || "",
+      updatedByEmail: normalizeEmail(profile.email),
+    });
+  }
+  await addActivity(project, profile, `Marked ${group.name} ${formatSubmissionVersionLabel(version)} ${nextStatus}`);
 }
 
 async function syncExistingGroupWorkflowRoster(project, periodId, group, profile, assignedStudentEmails = null) {
@@ -2512,7 +2968,7 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
   `;
 }
 
-function GradeDashboard({ projects, loading, error, periods, workflowMap, privateNotesMap, profile, setToast }) {
+function GradeDashboard({ projects, loading, error, periods, workflowMap, versionMap = {}, privateNotesMap, profile, setToast }) {
   const activePeriods = getActivePeriods(periods);
   const [selectedPeriodId, setSelectedPeriodId] = useState("");
   const [selectedUnit, setSelectedUnit] = useState("");
@@ -2686,6 +3142,7 @@ function GradeDashboard({ projects, loading, error, periods, workflowMap, privat
                                     period=${item.period}
                                     group=${item.group}
                                     workflow=${item.workflow}
+                                    versions=${versionMap[item.workflow.id] || []}
                                     privateNote=${privateNotesMap[item.workflow.id]}
                                     profile=${profile}
                                     setToast=${setToast}
@@ -2709,7 +3166,7 @@ function GradeSummaryTile({ label, value }) {
   `;
 }
 
-function GradeSubmissionCard({ project, period, group, workflow, privateNote, profile, setToast }) {
+function GradeSubmissionCard({ project, period, group, workflow, versions = [], privateNote, profile, setToast }) {
   const [draft, setDraft] = useState(() => ({
     teacherRubricScores: normalizeRubricScores(workflow.teacherRubricScores),
     teacherRubricComplete: normalizeRubricComplete(workflow.teacherRubricComplete, workflow.teacherRubricScores),
@@ -2718,18 +3175,45 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
     feedbackPublished: workflow.feedbackPublished === true,
   }));
   const [selfExpanded, setSelfExpanded] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [compareExpanded, setCompareExpanded] = useState(false);
+  const [selectedVersionId, setSelectedVersionId] = useState("");
   const [busy, setBusy] = useState(false);
-  const previewUrl = getGoogleDrivePreviewUrl(workflow.submissionUrl);
-  const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const normalizedVersions = normalizeSubmissionVersions(versions, workflow);
+  const latestVersion = getLatestSubmissionVersion(normalizedVersions);
+  const versionSignature = normalizedVersions
+    .map((version) => `${version.id}:${version.versionNumber}:${version.status}:${version.submissionUrl}`)
+    .join("|");
+  const selectedVersion =
+    normalizedVersions.find((version) => version.id === selectedVersionId) ||
+    latestVersion ||
+    null;
+  const selectedSubmissionUrl = selectedVersion?.submissionUrl || workflow.submissionUrl;
+  const previewUrl = getGoogleDrivePreviewUrl(selectedSubmissionUrl);
+  const openUrl = normalizeGoogleDriveUrl(selectedSubmissionUrl);
   const rubricMaxTotal = getRubricMaxTotal();
   const teacherTotal = calculateRubricTotal(draft.teacherRubricScores);
   const teacherPercent = gradePercent(teacherTotal, rubricMaxTotal);
   const teacherLetterGrade = letterGradeForPercent(teacherPercent);
-  const studentScores = normalizeRubricScores(workflow.studentSelfAssessment);
-  const studentTotal = calculateRubricTotal(studentScores);
-  const hasStudentSelfAssessment = Boolean(studentTotal || workflow.studentSelfAssessmentUpdatedAt);
-  const submitted = hasSubmittedWorkflow(workflow);
+  const studentScores = normalizeRubricScores(selectedVersion?.studentSelfAssessment || workflow.studentSelfAssessment);
+  const studentTotal = selectedVersion
+    ? Number(selectedVersion.studentSelfAssessmentTotal) || calculateRubricTotal(studentScores)
+    : calculateRubricTotal(studentScores);
+  const hasStudentSelfAssessment = Boolean(selectedVersion || studentTotal || workflow.studentSelfAssessmentUpdatedAt);
+  const submitted = Boolean(selectedVersion) || hasSubmittedWorkflow(workflow);
   const graded = hasWorkflowGrade(workflow);
+  const gradedVersion =
+    normalizedVersions.find((version) => version.id === workflow.gradedSubmissionVersionId) ||
+    (workflow.gradedSubmissionVersionNumber
+      ? normalizedVersions.find((version) => version.versionNumber === workflow.gradedSubmissionVersionNumber)
+      : null);
+  const previousVersion = selectedVersion
+    ? normalizedVersions
+        .filter((version) => version.versionNumber < selectedVersion.versionNumber)
+        .slice()
+        .pop()
+    : null;
 
   useEffect(() => {
     setDraft({
@@ -2748,6 +3232,21 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
     privateNote?.privateNotes,
     workflow.feedbackPublished,
   ]);
+
+  useEffect(() => {
+    if (!normalizedVersions.length) {
+      setSelectedVersionId("");
+      return;
+    }
+    const latestId = latestVersion?.id || normalizedVersions[normalizedVersions.length - 1]?.id || "";
+    if (!selectedVersionId || !normalizedVersions.some((version) => version.id === selectedVersionId)) {
+      setSelectedVersionId(latestId);
+    }
+  }, [workflow.id, versionSignature, selectedVersionId]);
+
+  useEffect(() => {
+    setCompareExpanded(false);
+  }, [selectedVersionId]);
 
   const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
   const updateTeacherRubricScore = (rubricItem, value) => {
@@ -2806,6 +3305,8 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
           gradedAt: serverTimestamp(),
           gradedBy: profile.uid || "",
           gradedByEmail: normalizeEmail(profile.email),
+          gradedSubmissionVersionId: selectedVersion?.id || "",
+          gradedSubmissionVersionNumber: selectedVersion?.versionNumber || 0,
           unit: getProjectUnit(project),
         },
         `Saved grade for ${group.name}`,
@@ -2816,6 +3317,20 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
       setToast(gradeError.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const updateSelectedVersionStatus = async (event) => {
+    const nextStatus = event.currentTarget.value;
+    if (!selectedVersion) return;
+    setStatusBusy(true);
+    try {
+      await updateSubmissionVersionStatus(project, period.id, group, workflow, selectedVersion, profile, nextStatus);
+      setToast(`${formatSubmissionVersionLabel(selectedVersion)} marked ${nextStatus}`);
+    } catch (statusError) {
+      setToast(statusError.message);
+    } finally {
+      setStatusBusy(false);
     }
   };
 
@@ -2834,7 +3349,7 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <${Badge} icon=${submitted ? FileText : AlertTriangle}>${submitted ? "Submitted" : "Missing submission"}</${Badge}>
+          <${Badge} icon=${submitted ? FileText : AlertTriangle}>${submitted ? selectedVersion?.status || "Submitted" : "Missing submission"}</${Badge}>
           <${Badge} icon=${graded ? CheckCircle2 : Circle}>${graded ? "Graded" : "Ungraded"}</${Badge}>
         </div>
       </div>
@@ -2845,7 +3360,11 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
             <div>
               <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Submission</p>
               <p className="mt-1 text-sm text-slate-400">
-                ${workflow.submittedAt ? `Last submitted ${timestampLabel(workflow.submittedAt)}` : "No submission timestamp yet"}
+                ${selectedVersion
+                  ? `${formatSubmissionVersionLabel(selectedVersion)} submitted ${timestampLabel(selectedVersion.submittedAt)} by ${selectedVersion.submittedByName || titleFromEmail(selectedVersion.submittedByEmail)}`
+                  : workflow.submittedAt
+                    ? `Last submitted ${timestampLabel(workflow.submittedAt)}`
+                    : "No submission timestamp yet"}
               </p>
             </div>
             ${openUrl
@@ -2858,6 +3377,104 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
                   >
                     Open in Drive
                   </a>
+                `
+              : null}
+          </div>
+          <div className="mb-3 grid gap-3 rounded-2xl border border-slate-700/70 bg-slate-950/45 p-3">
+            <div className="grid gap-3 md:grid-cols-[1fr_0.7fr]">
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Submission Versions
+                <${Select}
+                  value=${selectedVersion?.id || ""}
+                  disabled=${normalizedVersions.length === 0}
+                  onChange=${(event) => setSelectedVersionId(event.currentTarget.value)}
+                >
+                  ${normalizedVersions.length
+                    ? normalizedVersions
+                        .slice()
+                        .reverse()
+                        .map(
+                          (version) => html`
+                            <option key=${version.id} value=${version.id}>
+                              ${getVersionDisplayName(version)}
+                            </option>
+                          `,
+                        )
+                    : html`<option value="">No submitted versions yet</option>`}
+                </${Select}>
+              </label>
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Version status
+                <${Select}
+                  value=${selectedVersion?.status || "Submitted"}
+                  disabled=${!selectedVersion || statusBusy}
+                  onChange=${updateSelectedVersionStatus}
+                >
+                  ${SUBMISSION_VERSION_STATUSES.map(
+                    (status) => html`<option key=${status} value=${status}>${status}</option>`,
+                  )}
+                </${Select}>
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                ${selectedVersion
+                  ? html`
+                      <${Badge} icon=${selectedVersion.isLatest ? CheckCircle2 : Clock}>
+                        ${selectedVersion.isLatest ? "Latest Version" : selectedVersion.status}
+                      </${Badge}>
+                    `
+                  : null}
+                ${selectedVersion?.isFinal ? html`<${Badge} icon=${CheckCircle2}>Final</${Badge}>` : null}
+                ${gradedVersion
+                  ? html`<${Badge} icon=${CheckCircle2}>Grade saved to ${formatSubmissionVersionLabel(gradedVersion)}</${Badge}>`
+                  : graded
+                    ? html`<${Badge} icon=${CheckCircle2}>Grade saved</${Badge}>`
+                    : null}
+              </div>
+              <button
+                type="button"
+                className="text-sm font-black text-lens hover:text-sky-200"
+                onClick=${() => setHistoryExpanded((current) => !current)}
+              >
+                ${historyExpanded ? "Hide Version History" : "View Version History"}
+              </button>
+            </div>
+            ${historyExpanded
+              ? html`
+                  <div className="grid gap-2">
+                    ${normalizedVersions.length
+                      ? normalizedVersions
+                          .slice()
+                          .reverse()
+                          .map(
+                            (version) => html`
+                              <button
+                                key=${version.id}
+                                type="button"
+                                className=${classNames(
+                                  "rounded-xl p-3 text-left ring-1 transition",
+                                  selectedVersion?.id === version.id
+                                    ? "bg-lens/15 ring-lens/60"
+                                    : "bg-slate-950/45 ring-slate-700/70 hover:bg-slate-900",
+                                )}
+                                onClick=${() => setSelectedVersionId(version.id)}
+                              >
+                                <span className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="font-black text-white">${formatSubmissionVersionLabel(version)}</span>
+                                  <span className="text-xs font-black text-lens">${version.status}</span>
+                                </span>
+                                <span className="mt-1 block text-xs leading-5 text-slate-400">
+                                  ${timestampLabel(version.submittedAt)} - ${version.submittedByName || titleFromEmail(version.submittedByEmail)}
+                                </span>
+                                ${version.studentSubmissionNote
+                                  ? html`<span className="mt-2 block text-sm leading-6 text-slate-300">${version.studentSubmissionNote}</span>`
+                                  : null}
+                              </button>
+                            `,
+                          )
+                      : html`<p className="rounded-xl bg-slate-950/45 p-3 text-sm text-slate-500 ring-1 ring-slate-700/70">No submitted versions yet.</p>`}
+                  </div>
                 `
               : null}
           </div>
@@ -2887,9 +3504,64 @@ function GradeSubmissionCard({ project, period, group, workflow, privateNote, pr
           <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Student Planning / Pre-Production</p>
             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">
-              ${safeText(workflow.planningText) || "No planning/pre-production response submitted."}
+              ${safeText(selectedVersion?.planningText || workflow.planningText) || "No planning/pre-production response submitted."}
             </p>
           </div>
+          <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Student Submission Note</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">
+              ${safeText(selectedVersion?.studentSubmissionNote) || "No note included with this version."}
+            </p>
+          </div>
+          ${previousVersion
+            ? html`
+                <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 text-left"
+                    aria-expanded=${compareExpanded}
+                    onClick=${() => setCompareExpanded((current) => !current)}
+                  >
+                    <span>
+                      <span className="block text-xs font-black uppercase tracking-[0.18em] text-slate-500">Compare to Previous Version</span>
+                      <span className="mt-1 block font-black text-white">
+                        ${formatSubmissionVersionLabel(previousVersion)} to ${formatSubmissionVersionLabel(selectedVersion)}
+                      </span>
+                    </span>
+                    <${ChevronDown}
+                      size=${18}
+                      className=${classNames("shrink-0 text-slate-400 transition-transform", compareExpanded ? "rotate-180" : "")}
+                    />
+                  </button>
+                  ${compareExpanded
+                    ? html`
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          <div className="rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60">
+                            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Previous</p>
+                            <p className="mt-2 text-sm font-bold text-slate-300">${timestampLabel(previousVersion.submittedAt)}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-400">
+                              Self-score: ${formatRubricScore(Number(previousVersion.studentSelfAssessmentTotal) || calculateRubricTotal(previousVersion.studentSelfAssessment), rubricMaxTotal)}
+                            </p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">
+                              ${safeText(previousVersion.planningText) || "No planning text."}
+                            </p>
+                          </div>
+                          <div className="rounded-xl bg-slate-950/45 p-3 ring-1 ring-lens/40">
+                            <p className="text-xs font-black uppercase tracking-[0.16em] text-lens">Selected</p>
+                            <p className="mt-2 text-sm font-bold text-slate-300">${timestampLabel(selectedVersion.submittedAt)}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-400">
+                              Self-score: ${formatRubricScore(studentTotal, rubricMaxTotal)}
+                            </p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">
+                              ${safeText(selectedVersion.planningText) || "No planning text."}
+                            </p>
+                          </div>
+                        </div>
+                      `
+                    : null}
+                </div>
+              `
+            : null}
           <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
             <button
               type="button"
@@ -4893,6 +5565,7 @@ function StudentFilmingHome({
   enrollmentsError,
   periodsLoading,
   workflowMap,
+  versionMap = {},
   workflowsLoading,
   workflowsError,
   setToast,
@@ -4965,6 +5638,7 @@ function StudentFilmingHome({
               project=${selectedProject}
               enrollments=${activeEnrollments}
               workflowMap=${workflowMap}
+              versionMap=${versionMap}
               setToast=${setToast}
               setKioskActive=${setKioskActive}
             />
@@ -4974,7 +5648,7 @@ function StudentFilmingHome({
   `;
 }
 
-function AdminStudentPreview({ profile, project, workflowMap, setToast, setKioskActive, onClose }) {
+function AdminStudentPreview({ profile, project, workflowMap, versionMap, setToast, setKioskActive, onClose }) {
   const periodSummaries = projectPeriodSummaries(project);
   const [selectedPeriodId, setSelectedPeriodId] = useState(periodSummaries[0]?.id || "");
   const currentGroups = projectGroupsForPeriod(project, selectedPeriodId);
@@ -5036,6 +5710,7 @@ function AdminStudentPreview({ profile, project, workflowMap, setToast, setKiosk
         contextPeriodId=${selectedPeriodId}
         contextGroupId=${selectedGroupId}
         workflowMap=${workflowMap}
+        versionMap=${versionMap}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         previewMode=${true}
@@ -5044,7 +5719,7 @@ function AdminStudentPreview({ profile, project, workflowMap, setToast, setKiosk
   `;
 }
 
-function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, setToast, setKioskActive, onClose }) {
+function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, versionMap, setToast, setKioskActive, onClose }) {
   const activeProjects = projects.filter((project) => project.status !== "archived");
   const [selectedProjectId, setSelectedProjectId] = useState(activeProjects[0]?.id || "");
 
@@ -5133,6 +5808,7 @@ function StaffStudentPeriodPreview({ profile, period, projects, workflowMap, set
               contextPeriodId=${period.id}
               contextGroupId=${selectedGroupId}
               workflowMap=${workflowMap}
+              versionMap=${versionMap}
               setToast=${setToast}
               setKioskActive=${setKioskActive}
               previewMode=${true}
@@ -5156,6 +5832,7 @@ function FilmingWorkspace({
   contextPeriodId = "",
   contextGroupId = "",
   workflowMap = {},
+  versionMap = {},
   setToast,
   setKioskActive,
   previewMode = false,
@@ -5166,6 +5843,7 @@ function FilmingWorkspace({
   const [scriptDraft, setScriptDraft] = useState(() => normalizeScriptSections(project.scriptSections));
   const [scriptDirty, setScriptDirty] = useState(false);
   const [scriptSaving, setScriptSaving] = useState(false);
+  const [planningDraft, setPlanningDraft] = useState("");
   const workflowContext = resolveWorkflowContext({
     project,
     profile,
@@ -5178,6 +5856,13 @@ function FilmingWorkspace({
   const activeWorkflow = activeGroup
     ? workflowForContext(project, workflowContext.periodId, activeGroup, workflowMap)
     : null;
+  const activeVersions = activeWorkflow
+    ? normalizeSubmissionVersions(versionMap[activeWorkflow.id] || [], activeWorkflow)
+    : [];
+
+  useEffect(() => {
+    setPlanningDraft(safeText(activeWorkflow?.planningText));
+  }, [activeWorkflow?.id, activeWorkflow?.planningText]);
 
   useEffect(() => {
     if (!scriptDirty) setScriptDraft(normalizeScriptSections(project.scriptSections));
@@ -5465,6 +6150,8 @@ function FilmingWorkspace({
         periodId=${workflowContext.periodId}
         group=${activeGroup}
         workflow=${activeWorkflow}
+        planningDraft=${planningDraft}
+        setPlanningDraft=${setPlanningDraft}
         profile=${profile}
         setToast=${setToast}
       />
@@ -5494,6 +6181,8 @@ function FilmingWorkspace({
         periodId=${workflowContext.periodId}
         group=${activeGroup}
         workflow=${activeWorkflow}
+        versions=${activeVersions}
+        planningDraft=${planningDraft}
         profile=${profile}
         setToast=${setToast}
       />
@@ -5521,13 +6210,8 @@ function FilmingWorkspace({
   `;
 }
 
-function StudentPlanningPanel({ project, periodId, group, workflow, profile, setToast }) {
-  const [planningDraft, setPlanningDraft] = useState(() => safeText(workflow.planningText));
+function StudentPlanningPanel({ project, periodId, group, workflow, planningDraft, setPlanningDraft, profile, setToast }) {
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setPlanningDraft(safeText(workflow.planningText));
-  }, [workflow.id, workflow.planningText]);
 
   const savePlanning = async (event = null) => {
     event?.preventDefault?.();
@@ -5578,14 +6262,18 @@ function StudentPlanningPanel({ project, periodId, group, workflow, profile, set
   `;
 }
 
-function StudentSubmissionPanel({ project, periodId, group, workflow, profile, setToast }) {
+function StudentSubmissionPanel({ project, periodId, group, workflow, versions = [], planningDraft, profile, setToast }) {
   const submissionPanelRef = useRef(null);
   const [submissionDraft, setSubmissionDraft] = useState(() => safeText(workflow.submissionUrl));
   const [selfAssessmentDraft, setSelfAssessmentDraft] = useState(() =>
     studentRubricDraftForWorkflow(workflow),
   );
+  const [submissionNoteDraft, setSubmissionNoteDraft] = useState("");
+  const [versionLabelDraft, setVersionLabelDraft] = useState("Version");
   const [busy, setBusy] = useState(false);
-  const openUrl = normalizeGoogleDriveUrl(workflow.submissionUrl);
+  const normalizedVersions = normalizeSubmissionVersions(versions, workflow);
+  const latestVersion = getLatestSubmissionVersion(normalizedVersions);
+  const openUrl = normalizeGoogleDriveUrl(submissionDraft || workflow.submissionUrl);
   const rubricMaxTotal = getRubricMaxTotal();
   const selfAssessmentComplete = hasCompleteRubricDraft(selfAssessmentDraft);
   const studentSelfTotal = calculateRubricTotal(selfAssessmentDraft);
@@ -5640,28 +6328,23 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
 
     setBusy(true);
     try {
-      await saveGroupWorkflow(
-        project,
-        periodId,
-        group,
-        workflow,
-        profile,
+      const newVersion = await submitGroupWorkflowVersion(
         {
+          project,
+          periodId,
+          group,
+          workflow,
+          profile,
           submissionUrl: normalizedUrl,
-          submissionType: "googleDrive",
-          submittedAt: serverTimestamp(),
-          submittedBy: profile.uid || "",
-          submittedByEmail: normalizeEmail(profile.email),
+          planningText: planningDraft,
           studentSelfAssessment: normalizedSelfAssessment,
-          studentSelfAssessmentTotal: calculateRubricTotal(normalizedSelfAssessment),
-          studentSelfAssessmentUpdatedAt: serverTimestamp(),
-          studentSelfAssessmentUpdatedBy: profile.uid || "",
-          studentSelfAssessmentUpdatedByEmail: normalizeEmail(profile.email),
-          unit: getProjectUnit(project),
+          studentSubmissionNote: submissionNoteDraft,
+          versionLabel: versionLabelDraft,
         },
-        `Updated ${group.name} submission`,
       );
-      setToast("Submission saved");
+      setSubmissionNoteDraft("");
+      setVersionLabelDraft("Version");
+      setToast(`${formatSubmissionVersionLabel(newVersion)} submitted`);
     } catch (submissionError) {
       setToast(submissionError.message);
     } finally {
@@ -5674,13 +6357,13 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
       <div className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
         <div>
           <div className="mb-3">
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Last Step</p>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-lens">Current Draft</p>
             <h2 className="mt-1 text-lg font-black text-white">Final Submission</h2>
             <p className="text-sm leading-6 text-slate-400">
-              Paste the group's Google Drive video link and complete the self-assessment to submit.
+              Paste the group's Google Drive video link, complete the self-assessment, and submit a new version when ready.
             </p>
           </div>
-          <form onSubmit=${saveSubmission} className="grid gap-2 sm:grid-cols-[1fr_auto]">
+          <form onSubmit=${saveSubmission} className="grid gap-3">
             <${TextInput}
               value=${submissionDraft}
               onInput=${(event) => setSubmissionDraft(event.currentTarget.value)}
@@ -5689,87 +6372,173 @@ function StudentSubmissionPanel({ project, periodId, group, workflow, profile, s
               aria-label="Google Drive submission link"
               required=${true}
             />
-            <${Button} icon=${Save} type="submit" disabled=${busy}>
-              ${busy ? "Saving..." : "Save Submission"}
-            </${Button}>
-          </form>
-          ${openUrl
-            ? html`
-                <p className="mt-3 text-sm text-slate-400">
-                  Current submission:
-                  <a className="font-black text-lens hover:text-sky-200" href=${openUrl} target="_blank" rel="noreferrer">
-                    Open in Drive
-                  </a>
-                  ${workflow.submittedAt ? ` - ${timestampLabel(workflow.submittedAt)}` : ""}
-                </p>
-              `
-            : html`<p className="mt-3 text-sm text-slate-500">No submission link saved yet.</p>`}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Version label
+                <${Select}
+                  value=${versionLabelDraft}
+                  onChange=${(event) => setVersionLabelDraft(event.currentTarget.value)}
+                >
+                  ${SUBMISSION_VERSION_LABELS.map(
+                    (label) => html`<option key=${label} value=${label}>${label === "Version" ? "Version number" : label}</option>`,
+                  )}
+                </${Select}>
+              </label>
+              <label className="grid gap-1 text-sm font-bold text-slate-300">
+                Submission Note
+                <${TextInput}
+                  value=${submissionNoteDraft}
+                  onInput=${(event) => setSubmissionNoteDraft(event.currentTarget.value)}
+                  onChange=${(event) => setSubmissionNoteDraft(event.currentTarget.value)}
+                  placeholder="What changed in this version?"
+                />
+              </label>
+            </div>
+            ${openUrl
+              ? html`
+                  <p className="text-sm text-slate-400">
+                    Current draft link:
+                    <a className="font-black text-lens hover:text-sky-200" href=${openUrl} target="_blank" rel="noreferrer">
+                      Open in Drive
+                    </a>
+                  </p>
+                `
+              : html`<p className="text-sm text-slate-500">No submission link saved yet.</p>`}
 
-          <div className="mt-5 rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-black text-white">Student Self-Assessment</h2>
-                <p className="text-sm text-slate-400">
-                  Student Self-Score:
-                  ${selfAssessmentComplete ? formatRubricScore(studentSelfTotal, rubricMaxTotal) : "Complete every category"}
-                </p>
+            <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black text-white">Student Self-Assessment</h2>
+                  <p className="text-sm text-slate-400">
+                    Student Self-Score:
+                    ${selfAssessmentComplete ? formatRubricScore(studentSelfTotal, rubricMaxTotal) : "Complete every category"}
+                  </p>
+                </div>
+                <${Badge} icon=${CheckCircle2}>10 pts</${Badge}>
               </div>
-              <${Badge} icon=${CheckCircle2}>10 pts</${Badge}>
+              <div className="grid gap-2">
+                ${VIDEO_PRODUCTION_RUBRIC.map(
+                  (item) => html`
+                    <div key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[1fr_auto] sm:items-center">
+                      <span className="flex min-w-0 items-center gap-2 text-sm font-bold text-slate-200">
+                        <span>${item.label}</span>
+                        <${RubricHelpMark} label=${item.label} description=${item.description} />
+                      </span>
+                      <span className="flex items-center gap-2 text-sm font-black text-white">
+                        <${TextInput}
+                          type="number"
+                          min="0"
+                          max=${item.maxPoints}
+                          step="1"
+                          value=${selfAssessmentDraft[item.id]}
+                          onInput=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
+                          onChange=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
+                          data-self-assessment-score=${item.id}
+                          aria-label=${`${item.label} self-assessment score`}
+                          required=${true}
+                          className="w-16 py-2"
+                        />
+                        <span className="text-slate-400">/ ${item.maxPoints}</span>
+                      </span>
+                    </div>
+                  `,
+                )}
+              </div>
             </div>
-            <div className="grid gap-2">
-              ${VIDEO_PRODUCTION_RUBRIC.map(
-                (item) => html`
-                  <div key=${item.id} className="grid gap-2 rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60 sm:grid-cols-[1fr_auto] sm:items-center">
-                    <span className="flex min-w-0 items-center gap-2 text-sm font-bold text-slate-200">
-                      <span>${item.label}</span>
-                      <${RubricHelpMark} label=${item.label} description=${item.description} />
-                    </span>
-                    <span className="flex items-center gap-2 text-sm font-black text-white">
-                      <${TextInput}
-                        type="number"
-                        min="0"
-                        max=${item.maxPoints}
-                        step="1"
-                        value=${selfAssessmentDraft[item.id]}
-                        onInput=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
-                        onChange=${(event) => updateSelfAssessment(item, event.currentTarget.value)}
-                        data-self-assessment-score=${item.id}
-                        aria-label=${`${item.label} self-assessment score`}
-                        required=${true}
-                        className="w-16 py-2"
-                      />
-                      <span className="text-slate-400">/ ${item.maxPoints}</span>
-                    </span>
-                  </div>
-                `,
-              )}
-            </div>
-            <div className="mt-3 flex justify-end">
-              <${Button} icon=${Save} type="button" variant="secondary" disabled=${busy} onClick=${() => saveSubmission()}>
-                ${busy ? "Saving..." : "Save Submission"}
+
+            <div className="flex justify-end">
+              <${Button} icon=${Save} type="submit" disabled=${busy}>
+                ${busy ? "Submitting..." : normalizedVersions.length ? "Submit New Version" : "Submit Version 1"}
               </${Button}>
             </div>
-          </div>
+          </form>
         </div>
 
-        <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Teacher Feedback</p>
-          ${publishedFeedback
-            ? html`
-                <p className="mt-2 font-black text-white">
-                  ${hasTeacherRubricGrade
-                    ? `${teacherTotal}/${rubricMaxTotal}${percent === null ? "" : ` - ${percent}% ${workflow.letterGrade || letterGradeForPercent(percent)}`}`
-                    : "Reviewed"}
-                </p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  ${safeText(workflow.feedback) || "No written feedback yet."}
-                </p>
-              `
-            : html`
-                <p className="mt-2 text-sm leading-6 text-slate-500">
-                  Feedback will appear here after your teacher publishes it.
-                </p>
-              `}
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Latest Version</p>
+              ${latestVersion
+                ? html`<${Badge} icon=${latestVersion.status === "Needs Revision" ? AlertTriangle : CheckCircle2}>${latestVersion.status}</${Badge}>`
+                : null}
+            </div>
+            ${latestVersion
+              ? html`
+                  <p className="mt-2 font-black text-white">${getVersionDisplayName(latestVersion)}</p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Submitted ${timestampLabel(latestVersion.submittedAt)} by ${latestVersion.submittedByName || titleFromEmail(latestVersion.submittedByEmail)}
+                  </p>
+                  ${latestVersion.status === "Needs Revision"
+                    ? html`
+                        <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm font-bold leading-6 text-amber-100">
+                          Needs Revision. Update the current draft and submit a new version when your group is ready.
+                        </p>
+                      `
+                    : null}
+                  ${latestVersion.status === "Final Approved"
+                    ? html`
+                        <p className="mt-3 rounded-xl border border-signal/30 bg-signal/10 p-3 text-sm font-bold leading-6 text-green-100">
+                          Final Approved.
+                        </p>
+                      `
+                    : null}
+                `
+              : html`<p className="mt-2 text-sm leading-6 text-slate-500">No submitted versions yet.</p>`}
+          </div>
+
+          <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Submission History</p>
+            <div className="mt-3 grid gap-2">
+              ${normalizedVersions.length
+                ? normalizedVersions
+                    .slice()
+                    .reverse()
+                    .map(
+                      (version) => html`
+                        <article key=${version.id} className="rounded-xl bg-slate-950/45 p-3 ring-1 ring-slate-700/60">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="font-black text-white">${formatSubmissionVersionLabel(version)}</p>
+                              <p className="mt-1 text-xs leading-5 text-slate-400">
+                                ${timestampLabel(version.submittedAt)} - ${version.submittedByName || titleFromEmail(version.submittedByEmail)}
+                              </p>
+                            </div>
+                            <${Badge} icon=${version.isLatest ? CheckCircle2 : Clock}>
+                              ${version.isLatest ? "Latest" : version.status}
+                            </${Badge}>
+                          </div>
+                          ${version.studentSubmissionNote
+                            ? html`<p className="mt-2 text-sm leading-6 text-slate-300">${version.studentSubmissionNote}</p>`
+                            : null}
+                          <a className="mt-2 inline-flex text-sm font-black text-lens hover:text-sky-200" href=${version.submissionUrl} target="_blank" rel="noreferrer">
+                            Open version link
+                          </a>
+                        </article>
+                      `,
+                    )
+                : html`<p className="text-sm leading-6 text-slate-500">No submitted versions yet.</p>`}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-700/70 bg-slate-950/35 p-3">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Teacher Feedback</p>
+            ${publishedFeedback
+              ? html`
+                  <p className="mt-2 font-black text-white">
+                    ${hasTeacherRubricGrade
+                      ? `${teacherTotal}/${rubricMaxTotal}${percent === null ? "" : ` - ${percent}% ${workflow.letterGrade || letterGradeForPercent(percent)}`}`
+                      : "Reviewed"}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    ${safeText(workflow.feedback) || "No written feedback yet."}
+                  </p>
+                `
+              : html`
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    Feedback will appear here after your teacher publishes it.
+                  </p>
+                `}
+          </div>
         </div>
       </div>
     </section>
@@ -6490,6 +7259,11 @@ function VideoProductionApp() {
     loading: workflowsLoading,
     error: workflowsError,
   } = useProjectGroupWorkflows(profile, projects);
+  const {
+    versionMap: submissionVersionMap,
+    loading: submissionVersionsLoading,
+    error: submissionVersionsError,
+  } = useSubmissionVersions(profile, projects);
   const { users, loading: usersLoading, error: usersError } = useVideoUsers(isVideoAdmin(profile));
   const { profiles: studentProfiles, error: profilesError } = useVideoStudentProfiles(
     isVideoTeacher(profile) || isVideoAdmin(profile),
@@ -6569,6 +7343,7 @@ function VideoProductionApp() {
         period=${previewPeriod}
         projects=${previewPeriodProjects}
         workflowMap=${projectGroupWorkflows}
+        versionMap=${submissionVersionMap}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         onClose=${() => setPreviewPeriodId("")}
@@ -6580,6 +7355,7 @@ function VideoProductionApp() {
         profile=${profile}
         project=${previewProject}
         workflowMap=${projectGroupWorkflows}
+        versionMap=${submissionVersionMap}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
         onClose=${() => setPreviewProjectId("")}
@@ -6598,8 +7374,9 @@ function VideoProductionApp() {
         enrollmentsError=${enrollmentsError}
         periodsLoading=${periodsLoading}
         workflowMap=${projectGroupWorkflows}
-        workflowsLoading=${workflowsLoading}
-        workflowsError=${workflowsError}
+        versionMap=${submissionVersionMap}
+        workflowsLoading=${workflowsLoading || submissionVersionsLoading}
+        workflowsError=${workflowsError || submissionVersionsError}
         setToast=${setToast}
         setKioskActive=${setKioskActive}
       />
@@ -6659,10 +7436,11 @@ function VideoProductionApp() {
       <${GradeDashboard}
         profile=${profile}
         projects=${projects}
-        loading=${projectsLoading || workflowsLoading}
-        error=${projectsError || periodsError || workflowsError || privateNotesError}
+        loading=${projectsLoading || workflowsLoading || submissionVersionsLoading}
+        error=${projectsError || periodsError || workflowsError || submissionVersionsError || privateNotesError}
         periods=${periods}
         workflowMap=${projectGroupWorkflows}
+        versionMap=${submissionVersionMap}
         privateNotesMap=${privateGradeNotes}
         setToast=${setToast}
       />

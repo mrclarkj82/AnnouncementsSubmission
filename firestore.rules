@@ -203,6 +203,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/videoProjects/$(projectId);
     }
 
+    function projectGroupWorkflowPath(workflowId) {
+      return /databases/$(database)/documents/projectGroupWorkflows/$(workflowId);
+    }
+
     function periodPath(periodId) {
       return /databases/$(database)/documents/periods/$(periodId);
     }
@@ -330,6 +334,7 @@ service cloud.firestore {
           "submissionType",
           "submittedAt",
           "submittedBy",
+          "submittedByName",
           "submittedByEmail",
           "planningText",
           "studentSelfAssessment",
@@ -337,6 +342,12 @@ service cloud.firestore {
           "studentSelfAssessmentUpdatedAt",
           "studentSelfAssessmentUpdatedBy",
           "studentSelfAssessmentUpdatedByEmail",
+          "studentSubmissionNote",
+          "latestSubmissionVersionId",
+          "latestSubmissionVersionNumber",
+          "latestSubmissionVersionStatus",
+          "gradedSubmissionVersionId",
+          "gradedSubmissionVersionNumber",
           "teacherRubricScores",
           "teacherRubricComplete",
           "teacherRubricTotal",
@@ -372,12 +383,19 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAny(["submissionUrl"]) || request.resource.data.submissionUrl is string)
         && (!request.resource.data.keys().hasAny(["submissionType"]) || request.resource.data.submissionType is string)
         && (!request.resource.data.keys().hasAny(["submittedBy"]) || request.resource.data.submittedBy is string)
+        && (!request.resource.data.keys().hasAny(["submittedByName"]) || request.resource.data.submittedByName is string)
         && (!request.resource.data.keys().hasAny(["submittedByEmail"]) || request.resource.data.submittedByEmail is string)
         && (!request.resource.data.keys().hasAny(["planningText"]) || request.resource.data.planningText is string)
         && (!request.resource.data.keys().hasAny(["studentSelfAssessment"]) || request.resource.data.studentSelfAssessment is map)
         && (!request.resource.data.keys().hasAny(["studentSelfAssessmentTotal"]) || request.resource.data.studentSelfAssessmentTotal is number)
         && (!request.resource.data.keys().hasAny(["studentSelfAssessmentUpdatedBy"]) || request.resource.data.studentSelfAssessmentUpdatedBy is string)
         && (!request.resource.data.keys().hasAny(["studentSelfAssessmentUpdatedByEmail"]) || request.resource.data.studentSelfAssessmentUpdatedByEmail is string)
+        && (!request.resource.data.keys().hasAny(["studentSubmissionNote"]) || request.resource.data.studentSubmissionNote is string)
+        && (!request.resource.data.keys().hasAny(["latestSubmissionVersionId"]) || request.resource.data.latestSubmissionVersionId is string)
+        && (!request.resource.data.keys().hasAny(["latestSubmissionVersionNumber"]) || request.resource.data.latestSubmissionVersionNumber is number)
+        && (!request.resource.data.keys().hasAny(["latestSubmissionVersionStatus"]) || request.resource.data.latestSubmissionVersionStatus is string)
+        && (!request.resource.data.keys().hasAny(["gradedSubmissionVersionId"]) || request.resource.data.gradedSubmissionVersionId is string)
+        && (!request.resource.data.keys().hasAny(["gradedSubmissionVersionNumber"]) || request.resource.data.gradedSubmissionVersionNumber is number)
         && (!request.resource.data.keys().hasAny(["teacherRubricScores"]) || request.resource.data.teacherRubricScores is map)
         && (!request.resource.data.keys().hasAny(["teacherRubricComplete"]) || request.resource.data.teacherRubricComplete is map)
         && (!request.resource.data.keys().hasAny(["teacherRubricTotal"]) || request.resource.data.teacherRubricTotal is number)
@@ -491,6 +509,7 @@ service cloud.firestore {
         "submissionType",
         "submittedAt",
         "submittedBy",
+        "submittedByName",
         "submittedByEmail",
         "planningText",
         "studentSelfAssessment",
@@ -498,11 +517,19 @@ service cloud.firestore {
         "studentSelfAssessmentUpdatedAt",
         "studentSelfAssessmentUpdatedBy",
         "studentSelfAssessmentUpdatedByEmail",
+        "studentSubmissionNote",
+        "latestSubmissionVersionId",
+        "latestSubmissionVersionNumber",
+        "latestSubmissionVersionStatus",
         "unit",
         "updatedAt",
         "updatedBy",
         "updatedByEmail"
-      ]);
+      ])
+      && (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["latestSubmissionVersionStatus"])
+        || request.resource.data.latestSubmissionVersionStatus == "Submitted"
+      );
     }
 
     function validProjectGroupPrivateNote(workflowId) {
@@ -524,6 +551,93 @@ service cloud.firestore {
         && request.resource.data.updatedBy is string
         && request.resource.data.updatedByEmail is string
         && request.resource.data.updatedByEmail == request.resource.data.updatedByEmail.lower();
+    }
+
+    function validSubmissionVersionStatus(statusValue) {
+      return statusValue in [
+        "Submitted",
+        "Reviewed",
+        "Needs Revision",
+        "Final Approved"
+      ];
+    }
+
+    function validSubmissionVersion(workflowId, versionId) {
+      return request.resource.data.keys().hasOnly([
+          "id",
+          "versionId",
+          "workflowId",
+          "projectId",
+          "periodId",
+          "groupId",
+          "unit",
+          "projectTitle",
+          "periodName",
+          "groupName",
+          "assignedStudentEmails",
+          "versionNumber",
+          "versionLabel",
+          "status",
+          "submissionUrl",
+          "submissionType",
+          "planningText",
+          "studentSelfAssessment",
+          "studentSelfAssessmentTotal",
+          "studentSubmissionNote",
+          "submittedAt",
+          "submittedBy",
+          "submittedByName",
+          "submittedByEmail",
+          "isLatest",
+          "isFinal",
+          "gradedSubmissionVersionId",
+          "reviewedSubmissionVersionId",
+          "createdAt",
+          "updatedAt",
+          "teacherStatusUpdatedAt",
+          "teacherStatusUpdatedBy",
+          "teacherStatusUpdatedByEmail",
+          "isLegacy"
+        ])
+        && request.resource.data.id == versionId
+        && request.resource.data.versionId == versionId
+        && request.resource.data.workflowId == workflowId
+        && request.resource.data.projectId is string
+        && request.resource.data.periodId is string
+        && request.resource.data.groupId is string
+        && request.resource.data.unit is number
+        && request.resource.data.projectTitle is string
+        && request.resource.data.periodName is string
+        && request.resource.data.groupName is string
+        && request.resource.data.assignedStudentEmails is list
+        && request.resource.data.versionNumber is number
+        && request.resource.data.versionNumber >= 1
+        && request.resource.data.versionLabel is string
+        && request.resource.data.status is string
+        && validSubmissionVersionStatus(request.resource.data.status)
+        && request.resource.data.submissionUrl is string
+        && request.resource.data.submissionUrl.matches("^https://drive[.]google[.]com/.*")
+        && request.resource.data.submissionType == "googleDrive"
+        && request.resource.data.planningText is string
+        && request.resource.data.studentSelfAssessment is map
+        && request.resource.data.studentSelfAssessmentTotal is number
+        && request.resource.data.studentSubmissionNote is string
+        && (request.resource.data.submittedAt is timestamp || request.resource.data.submittedAt is string)
+        && request.resource.data.submittedBy is string
+        && request.resource.data.submittedByName is string
+        && request.resource.data.submittedByEmail is string
+        && request.resource.data.submittedByEmail == request.resource.data.submittedByEmail.lower()
+        && request.resource.data.isLatest is bool
+        && request.resource.data.isFinal is bool
+        && request.resource.data.gradedSubmissionVersionId is string
+        && request.resource.data.reviewedSubmissionVersionId is string
+        && (request.resource.data.createdAt is timestamp || request.resource.data.createdAt is string)
+        && (request.resource.data.updatedAt is timestamp || request.resource.data.updatedAt is string)
+        && (request.resource.data.teacherStatusUpdatedAt is timestamp || request.resource.data.teacherStatusUpdatedAt is string)
+        && request.resource.data.teacherStatusUpdatedBy is string
+        && request.resource.data.teacherStatusUpdatedByEmail is string
+        && request.resource.data.isLegacy is bool
+        && completeStudentSelfAssessment();
     }
 
     function validPeriod(periodId) {
@@ -1068,6 +1182,47 @@ service cloud.firestore {
         && signedInEmail() in request.resource.data.assignedStudentEmails
         && canReadVideoProjectId(resource.data.projectId);
       allow delete: if isVideoAdmin();
+
+      match /submissionVersions/{versionId} {
+        allow get, list: if isVideoAdmin()
+          || isVideoTeacher()
+          || (
+            isVideoStudent()
+            && exists(projectGroupWorkflowPath(workflowId))
+            && signedInEmail() in get(projectGroupWorkflowPath(workflowId)).data.assignedStudentEmails
+            && canReadVideoProjectId(get(projectGroupWorkflowPath(workflowId)).data.projectId)
+          );
+        allow create: if validSubmissionVersion(workflowId, versionId)
+          && (
+            canManageVideoProjectId(request.resource.data.projectId)
+            || (
+              isVideoStudent()
+              && exists(projectGroupWorkflowPath(workflowId))
+              && signedInEmail() in get(projectGroupWorkflowPath(workflowId)).data.assignedStudentEmails
+              && signedInEmail() in request.resource.data.assignedStudentEmails
+              && request.resource.data.projectId == get(projectGroupWorkflowPath(workflowId)).data.projectId
+              && request.resource.data.periodId == get(projectGroupWorkflowPath(workflowId)).data.periodId
+              && request.resource.data.groupId == get(projectGroupWorkflowPath(workflowId)).data.groupId
+              && canReadVideoProjectId(request.resource.data.projectId)
+              && request.resource.data.status == "Submitted"
+              && request.resource.data.teacherStatusUpdatedBy == ""
+              && request.resource.data.teacherStatusUpdatedByEmail == ""
+              && (
+                request.resource.data.isLegacy == true
+                || request.resource.data.submittedByEmail == signedInEmail()
+              )
+            )
+          );
+        allow update: if validSubmissionVersion(workflowId, versionId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.versionId == resource.data.versionId
+          && request.resource.data.workflowId == resource.data.workflowId
+          && request.resource.data.projectId == resource.data.projectId
+          && request.resource.data.periodId == resource.data.periodId
+          && request.resource.data.groupId == resource.data.groupId
+          && canManageVideoProjectId(resource.data.projectId);
+        allow delete: if isVideoAdmin();
+      }
     }
 
     match /projectGroupPrivateNotes/{workflowId} {
