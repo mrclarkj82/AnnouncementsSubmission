@@ -796,66 +796,20 @@ function getProjectStatusProgress(status) {
 }
 
 function getProjectStatusTheme(status) {
-  const normalizedStatus = normalizeProjectStatus(status);
-  const themes = {
-    notStarted: {
-      card:
-        "linear-gradient(135deg, rgba(71, 85, 105, 0.18), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(148, 163, 184, 0.26)",
-      bar: "bg-slate-300",
-      badge: projectStatusTone(normalizedStatus),
+  const progress = getProjectStatusProgress(status);
+  const hue = Math.round((progress.current / progress.total) * 126);
+  return {
+    card:
+      `linear-gradient(135deg, hsla(${hue}, 78%, 42%, 0.28), rgba(8, 13, 23, 0.96) 54%)`,
+    borderColor: `hsla(${hue}, 78%, 56%, 0.44)`,
+    barStyle: {
+      background: `linear-gradient(90deg, hsl(0, 78%, 52%), hsl(${hue}, 78%, 48%))`,
     },
-    planning: {
-      card:
-        "linear-gradient(135deg, rgba(139, 92, 246, 0.24), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(139, 92, 246, 0.42)",
-      bar: "bg-violetline",
-      badge: projectStatusTone(normalizedStatus),
-    },
-    filming: {
-      card:
-        "linear-gradient(135deg, rgba(34, 197, 94, 0.24), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(34, 197, 94, 0.42)",
-      bar: "bg-signal",
-      badge: projectStatusTone(normalizedStatus),
-    },
-    editing: {
-      card:
-        "linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(245, 158, 11, 0.42)",
-      bar: "bg-warning",
-      badge: projectStatusTone(normalizedStatus),
-    },
-    submitted: {
-      card:
-        "linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(56, 189, 248, 0.42)",
-      bar: "bg-lens",
-      badge: projectStatusTone(normalizedStatus),
-    },
-    reviewed: {
-      card:
-        "linear-gradient(135deg, rgba(124, 58, 237, 0.24), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(124, 58, 237, 0.42)",
-      bar: "bg-violet-400",
-      badge: projectStatusTone(normalizedStatus),
-    },
-    needsRevision: {
-      card:
-        "linear-gradient(135deg, rgba(239, 68, 68, 0.24), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(239, 68, 68, 0.42)",
-      bar: "bg-alert",
-      badge: projectStatusTone(normalizedStatus),
-    },
-    finalApproved: {
-      card:
-        "linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(8, 13, 23, 0.96) 54%)",
-      borderColor: "rgba(16, 185, 129, 0.46)",
-      bar: "bg-emerald-400",
-      badge: projectStatusTone(normalizedStatus),
+    badgeStyle: {
+      backgroundColor: `hsla(${hue}, 78%, 42%, 0.18)`,
+      borderColor: `hsla(${hue}, 78%, 58%, 0.42)`,
     },
   };
-  return themes[normalizedStatus] || themes.notStarted;
 }
 
 function projectStatusFromSubmissionStatus(status) {
@@ -3150,7 +3104,7 @@ function MonitorDashboard({
   `;
 }
 
-function MonitorProgressBar({ label, valueLabel, percent, barClass }) {
+function MonitorProgressBar({ label, valueLabel, percent, barClass = "", barStyle = {} }) {
   const width = Math.max(0, Math.min(100, Number(percent) || 0));
   return html`
     <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
@@ -3161,7 +3115,7 @@ function MonitorProgressBar({ label, valueLabel, percent, barClass }) {
       <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-950/80 ring-1 ring-white/10">
         <div
           className=${classNames("h-full rounded-full transition-all duration-500", barClass)}
-          style=${{ width: `${width}%` }}
+          style=${{ ...barStyle, width: `${width}%` }}
         ></div>
       </div>
     </div>
@@ -3198,7 +3152,10 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
           <h2 className="mt-1 truncate text-lg font-black text-white">${project.title}</h2>
           <p className="text-sm font-black text-lens">${group.name}</p>
           <p className="text-xs text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
-          <span className=${classNames("mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.14em] ring-1", statusTheme.badge)}>
+          <span
+            className="mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-white ring-1"
+            style=${statusTheme.badgeStyle}
+          >
             ${statusProgress.label}
           </span>
         </div>
@@ -3213,21 +3170,14 @@ function ProjectMonitorCard({ project, period, group, workflow, profileByEmail, 
           label="Project Status"
           valueLabel=${`${statusProgress.label} - ${statusProgress.current}/${statusProgress.total}`}
           percent=${statusProgress.percent}
-          barClass=${statusTheme.bar}
+          barStyle=${statusTheme.barStyle}
         />
-        <div
-          className="h-2.5 overflow-hidden rounded-full bg-slate-950/80 ring-1 ring-white/10"
-          role="progressbar"
-          aria-label="Daily Recording Checklist progress"
-          aria-valuemin="0"
-          aria-valuemax=${checklistProgressValue.total}
-          aria-valuenow=${checklistProgressValue.completed}
-        >
-          <div
-            className="h-full rounded-full bg-white transition-all duration-500"
-            style=${{ width: `${checklistProgressValue.percent}%` }}
-          ></div>
-        </div>
+        <${MonitorProgressBar}
+          label="Daily Checklist Progress"
+          valueLabel=${`${checklistProgressValue.completed}/${checklistProgressValue.total}`}
+          percent=${checklistProgressValue.percent}
+          barClass="bg-white"
+        />
       </div>
 
       <div className="mt-3 grid gap-2 text-sm text-slate-300">
