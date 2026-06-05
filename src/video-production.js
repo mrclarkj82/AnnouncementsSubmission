@@ -773,6 +773,91 @@ function projectStatusTone(status) {
   return projectStatusDefinition(status).tone;
 }
 
+function getProjectStatusProgress(status) {
+  const normalizedStatus = normalizeProjectStatus(status);
+  const stepMap = {
+    notStarted: 0,
+    planning: 1,
+    filming: 2,
+    editing: 3,
+    submitted: 4,
+    reviewed: 5,
+    needsRevision: 6,
+    finalApproved: 7,
+  };
+  const current = stepMap[normalizedStatus] ?? 0;
+  const total = 7;
+  return {
+    current,
+    total,
+    percent: Math.round((current / total) * 1000) / 10,
+    label: projectStatusLabel(normalizedStatus),
+  };
+}
+
+function getProjectStatusTheme(status) {
+  const normalizedStatus = normalizeProjectStatus(status);
+  const themes = {
+    notStarted: {
+      card:
+        "linear-gradient(135deg, rgba(71, 85, 105, 0.18), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(148, 163, 184, 0.26)",
+      bar: "bg-slate-300",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    planning: {
+      card:
+        "linear-gradient(135deg, rgba(139, 92, 246, 0.24), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(139, 92, 246, 0.42)",
+      bar: "bg-violetline",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    filming: {
+      card:
+        "linear-gradient(135deg, rgba(34, 197, 94, 0.24), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(34, 197, 94, 0.42)",
+      bar: "bg-signal",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    editing: {
+      card:
+        "linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(245, 158, 11, 0.42)",
+      bar: "bg-warning",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    submitted: {
+      card:
+        "linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(56, 189, 248, 0.42)",
+      bar: "bg-lens",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    reviewed: {
+      card:
+        "linear-gradient(135deg, rgba(124, 58, 237, 0.24), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(124, 58, 237, 0.42)",
+      bar: "bg-violet-400",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    needsRevision: {
+      card:
+        "linear-gradient(135deg, rgba(239, 68, 68, 0.24), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(239, 68, 68, 0.42)",
+      bar: "bg-alert",
+      badge: projectStatusTone(normalizedStatus),
+    },
+    finalApproved: {
+      card:
+        "linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(8, 13, 23, 0.96) 54%)",
+      borderColor: "rgba(16, 185, 129, 0.46)",
+      bar: "bg-emerald-400",
+      badge: projectStatusTone(normalizedStatus),
+    },
+  };
+  return themes[normalizedStatus] || themes.notStarted;
+}
+
 function projectStatusFromSubmissionStatus(status) {
   const value = normalizeSubmissionVersionStatus(status);
   if (value === "Reviewed") return "reviewed";
@@ -3067,9 +3152,29 @@ function MonitorDashboard({
   `;
 }
 
+function MonitorProgressBar({ label, valueLabel, percent, barClass }) {
+  const width = Math.max(0, Math.min(100, Number(percent) || 0));
+  return html`
+    <div className="rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
+      <div className="flex items-center justify-between gap-3 text-[11px] font-black uppercase tracking-[0.16em]">
+        <span className="text-slate-500">${label}</span>
+        <span className="text-slate-200">${valueLabel}</span>
+      </div>
+      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-950/80 ring-1 ring-white/10">
+        <div
+          className=${classNames("h-full rounded-full transition-all duration-500", barClass)}
+          style=${{ width: `${width}%` }}
+        ></div>
+      </div>
+    </div>
+  `;
+}
+
 function ProjectMonitorCard({ project, period, group, workflow, profile, profileByEmail, interestIndex, setToast }) {
   const [statusBusy, setStatusBusy] = useState(false);
-  const progress = checklistProgress(workflow.checklistItems);
+  const checklistProgressValue = checklistProgress(workflow.checklistItems);
+  const statusProgress = getProjectStatusProgress(workflow.filmingStatus);
+  const statusTheme = getProjectStatusTheme(workflow.filmingStatus);
   const students = group.assignedStudentEmails || [];
   const interestPool = students.flatMap((email) =>
     flattenStudentInterests(profileByEmail.get(normalizeEmail(email))).map(
@@ -3101,7 +3206,13 @@ function ProjectMonitorCard({ project, period, group, workflow, profile, profile
   };
 
   return html`
-    <article className="vp-panel vp-fade rounded-2xl p-3" style=${progressTone(progress.percent)}>
+    <article
+      className="vp-panel vp-fade rounded-2xl border p-3"
+      style=${{
+        background: statusTheme.card,
+        borderColor: statusTheme.borderColor,
+      }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
@@ -3110,18 +3221,29 @@ function ProjectMonitorCard({ project, period, group, workflow, profile, profile
           <h2 className="mt-1 truncate text-lg font-black text-white">${project.title}</h2>
           <p className="text-sm font-black text-lens">${group.name}</p>
           <p className="text-xs text-slate-300">${students.length} student${students.length === 1 ? "" : "s"} assigned</p>
-          <span className=${classNames("mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.14em] ring-1", projectStatusTone(workflow.filmingStatus))}>
-            ${projectStatusLabel(workflow.filmingStatus)}
+          <span className=${classNames("mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.14em] ring-1", statusTheme.badge)}>
+            ${statusProgress.label}
           </span>
         </div>
         <div className="rounded-xl bg-slate-950/50 px-2.5 py-2 text-right ring-1 ring-white/10">
-          <p className="text-xl font-black text-white">${progress.completed}/${progress.total}</p>
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">today</p>
+          <p className="text-xl font-black text-white">${statusProgress.current}/${statusProgress.total}</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">status</p>
         </div>
       </div>
 
-      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-950/70 ring-1 ring-white/10">
-        <div className="h-full rounded-full bg-white transition-all duration-500" style=${{ width: `${progress.percent}%` }}></div>
+      <div className="mt-3 grid gap-3">
+        <${MonitorProgressBar}
+          label="Project Status"
+          valueLabel=${`${statusProgress.label} - ${statusProgress.current}/${statusProgress.total}`}
+          percent=${statusProgress.percent}
+          barClass=${statusTheme.bar}
+        />
+        <${MonitorProgressBar}
+          label="Daily Recording Checklist"
+          valueLabel=${`${checklistProgressValue.completed}/${checklistProgressValue.total} - ${checklistProgressValue.percent}% today`}
+          percent=${checklistProgressValue.percent}
+          barClass="bg-white"
+        />
       </div>
 
       <div className="mt-3 grid gap-2 text-sm text-slate-300">
@@ -3152,7 +3274,11 @@ function ProjectMonitorCard({ project, period, group, workflow, profile, profile
 
       <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
         <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Daily Recording Checklist</p>
-        <p className="mt-0.5 font-black text-white">${progress.completed}/${progress.total} complete today</p>
+        <p className="mt-0.5 font-black text-white">
+          ${checklistProgressValue.total
+            ? `${checklistProgressValue.completed}/${checklistProgressValue.total} complete today`
+            : "No daily checklist items today"}
+        </p>
       </div>
 
       <div className="mt-3 rounded-xl bg-slate-950/42 p-2.5 ring-1 ring-white/10">
