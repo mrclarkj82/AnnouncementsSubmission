@@ -34,6 +34,34 @@ When Studio marks an announcement `Approved`, it is automatically added to each 
 
 Broadcast Desk status changes to `Approved`, `Needs Revision`, or `Rejected` now create a locked-down `mail` queue document addressed to the announcement submitter. Actual email delivery requires Firebase's Trigger Email extension, or an equivalent Cloud Function, to be configured for the `mail` collection. `Needs Revision` and `Rejected` require a submitter-facing note before the status can be saved.
 
+### Broadcast Desk Email Delivery Setup
+
+The app is already writing email jobs to Firestore in the `mail` collection. To actually send those emails, install Firebase's official `Trigger Email from Firestore` extension or replace it later with a Cloud Function.
+
+Recommended extension settings:
+
+- Extension: `Trigger Email from Firestore`
+- Firebase project: `announcementssubmission`
+- Email documents collection: `mail`
+- Default FROM address: a school-approved sender, such as `Broadcast Desk <noreply@doralacademynv.org>` if available
+- Default REPLY-TO address: `joseph.clark@doralacademynv.org` or another monitored staff address
+- Users collection: leave blank
+- Templates collection: leave blank for now
+
+What is still needed:
+
+- The Firebase project must be on the Blaze pay-as-you-go plan to install Firebase Extensions.
+- An outgoing mail provider must be configured with SMTP credentials. Common options are SendGrid, Mailgun, Mailchimp Transactional, or another approved SMTP provider.
+- Gmail/Google SMTP may work only if the sending account allows either app passwords or OAuth. App passwords require 2-Step Verification and may be disabled by Google Workspace admin policy. OAuth is more secure but usually requires more Google Cloud setup and may also require Workspace/admin approval.
+- Do not store SMTP passwords or provider API keys in this repository. Put those secrets directly into Firebase Extension configuration or Google Secret Manager.
+
+Current app behavior after setup:
+
+- Approving an announcement queues an email to the submitting teacher.
+- Marking an announcement `Needs Revision` queues an email with the required studio note.
+- Marking an announcement `Rejected` queues an email with the required studio note.
+- Firestore rules restrict `mail` document creation so staff can only queue status emails to the original announcement submitter.
+
 Teachers only paste Google Drive links; the app does not upload video files.
 
 Video Production Studio is a separate direct-entry app at `video-production.html`. It is intentionally not linked from Broadcast Desk, and Broadcast Desk is not linked from Video Production Studio.
