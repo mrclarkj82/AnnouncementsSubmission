@@ -159,6 +159,50 @@ service cloud.firestore {
       return value in ["Draft", "Finalized", "Archived"];
     }
 
+    function announcementPath(announcementId) {
+      return /databases/$(database)/documents/announcements/$(announcementId);
+    }
+
+    function needsSubmitterNote(statusValue) {
+      return statusValue in ["Needs Revision", "Rejected"];
+    }
+
+    function hasRequiredSubmitterNote() {
+      return !needsSubmitterNote(request.resource.data.status)
+        || (
+          request.resource.data.submitterNote is string
+          && request.resource.data.submitterNote.matches('.*\\S.*')
+        );
+    }
+
+    function validAnnouncementStatusEmail() {
+      return isStaff()
+        && request.resource.data.keys().hasOnly([
+          "to",
+          "announcementId",
+          "status",
+          "createdAt",
+          "createdBy",
+          "createdByEmail",
+          "message"
+        ])
+        && request.resource.data.announcementId is string
+        && exists(announcementPath(request.resource.data.announcementId))
+        && request.resource.data.status in ["Approved", "Needs Revision", "Rejected"]
+        && request.resource.data.status == get(announcementPath(request.resource.data.announcementId)).data.status
+        && request.resource.data.to is list
+        && request.resource.data.to.size() == 1
+        && request.resource.data.to[0] == get(announcementPath(request.resource.data.announcementId)).data.submittedByEmail
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.createdBy is string
+        && request.resource.data.createdByEmail == signedInEmail()
+        && request.resource.data.message is map
+        && request.resource.data.message.keys().hasOnly(["subject", "text", "html"])
+        && request.resource.data.message.subject is string
+        && request.resource.data.message.text is string
+        && request.resource.data.message.html is string;
+    }
+
     function validVideoProjectStatus(value) {
       return value in ["active", "paused", "complete", "archived"];
     }
@@ -940,17 +984,27 @@ service cloud.firestore {
         && request.resource.data.status == "Submitted";
       allow update: if isAdmin()
         && validAnnouncementStatus(request.resource.data.status)
+        && hasRequiredSubmitterNote()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           "status",
           "studioNotes",
+          "submitterNote",
+          "submitterNoteUpdatedAt",
+          "submitterNoteUpdatedBy",
+          "submitterNoteUpdatedByEmail",
           "deletedAt",
           "updatedAt"
         ]);
       allow update: if isStudioCrew()
         && validAnnouncementStatus(request.resource.data.status)
+        && hasRequiredSubmitterNote()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           "status",
           "studioNotes",
+          "submitterNote",
+          "submitterNoteUpdatedAt",
+          "submitterNoteUpdatedBy",
+          "submitterNoteUpdatedByEmail",
           "updatedAt"
         ]);
       allow update: if ownsAnnouncement()
@@ -981,6 +1035,7 @@ service cloud.firestore {
       allow create: if isStudioCrew()
         && request.resource.data.rundownId == rundownId
         && request.resource.data.locked == false
+        && request.resource.data.status == "Draft"
         && validRundownStatus(request.resource.data.status);
       allow update: if isAdmin()
         && validRundownStatus(request.resource.data.status);
@@ -992,13 +1047,24 @@ service cloud.firestore {
       allow update: if isStudioCrew()
         && resource.data.locked == false
         && request.resource.data.locked == resource.data.locked
-        && validRundownStatus(request.resource.data.status);
+        && request.resource.data.status == resource.data.status
+        && validRundownStatus(request.resource.data.status)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "items",
+          "checklistItems",
+          "updatedAt"
+        ]);
       allow delete: if isAdmin();
     }
 
     match /rundownItems/{rundownItemId} {
       allow get, list: if isStaff();
       allow create, update, delete: if isAdmin();
+    }
+
+    match /mail/{mailId} {
+      allow create: if validAnnouncementStatusEmail();
+      allow get, list, update, delete: if isAdmin();
     }
 
     match /videoUsers/{userEmail} {

@@ -88,6 +88,7 @@ const ANNOUNCEMENT_STATUSES = [
   "Archived",
   "Rejected",
 ];
+const ANNOUNCEMENT_EMAIL_STATUSES = ["Approved", "Needs Revision", "Rejected"];
 const ITEM_STATUSES = [
   "Submitted",
   "Approved",
@@ -110,13 +111,26 @@ const DEFAULT_STUDIO_CHECKLIST_LABELS = [
   "Sports video loaded",
 ];
 const RUNDOWN_SECTIONS = [
-  "Intro",
-  "Main Announcements",
-  "Video Clips",
+  "Anchor Intros / Transition to Pledge",
+  "Weather",
+  "School Happenings",
   "Sports",
-  "Clubs",
-  "Closing",
+  "Anchor Wrap Up",
 ];
+const RUNDOWN_SECTION_ALIASES = {
+  "intro": RUNDOWN_SECTIONS[0],
+  "anchor intro": RUNDOWN_SECTIONS[0],
+  "anchor intros": RUNDOWN_SECTIONS[0],
+  "transition to pledge": RUNDOWN_SECTIONS[0],
+  "main announcements": RUNDOWN_SECTIONS[2],
+  "announcements": RUNDOWN_SECTIONS[2],
+  "school happenings": RUNDOWN_SECTIONS[2],
+  "video clips": RUNDOWN_SECTIONS[2],
+  "clubs": RUNDOWN_SECTIONS[2],
+  "closing": RUNDOWN_SECTIONS[4],
+  "wrap up": RUNDOWN_SECTIONS[4],
+  "anchor wrap up": RUNDOWN_SECTIONS[4],
+};
 const DEFAULT_CATEGORIES = [
   { id: "general", name: "General", color: "#38bdf8", type: "category" },
   { id: "academics", name: "Academics", color: "#2dd4bf", type: "category" },
@@ -293,12 +307,32 @@ function safeText(value) {
   return `${value || ""}`.trim();
 }
 
+function normalizeRundownSection(section) {
+  const label = safeText(section);
+  if (!label) return RUNDOWN_SECTIONS[2];
+  const exact = RUNDOWN_SECTIONS.find((item) => item.toLowerCase() === label.toLowerCase());
+  return exact || RUNDOWN_SECTION_ALIASES[label.toLowerCase()] || RUNDOWN_SECTIONS[2];
+}
+
+function rundownSectionIndex(section) {
+  const index = RUNDOWN_SECTIONS.indexOf(normalizeRundownSection(section));
+  return index >= 0 ? index : RUNDOWN_SECTIONS.length;
+}
+
+function escapeHtml(value) {
+  return safeText(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function sectionForAnnouncement(announcement) {
   const category = safeText(announcement.category).toLowerCase();
-  if (category.includes("sport")) return "Sports";
-  if (category.includes("club")) return "Clubs";
-  if (announcement.driveVideoLink) return "Video Clips";
-  return "Main Announcements";
+  if (category.includes("weather")) return RUNDOWN_SECTIONS[1];
+  if (category.includes("sport")) return RUNDOWN_SECTIONS[3];
+  return RUNDOWN_SECTIONS[2];
 }
 
 function buildAnnouncementScript(announcement) {
@@ -306,6 +340,58 @@ function buildAnnouncementScript(announcement) {
     ? "\n\nVIDEO CUE: Roll the linked Google Drive clip."
     : "";
   return `${announcement.title}\n\n${announcement.text}${videoCue}`.trim();
+}
+
+function announcementStatusEmailSubject(status, announcement) {
+  const title = safeText(announcement.title) || "your announcement";
+  return `Broadcast announcement ${status.toLowerCase()}: ${title}`;
+}
+
+function announcementStatusEmailText(announcement, status, note) {
+  const lines = [
+    `Hello ${safeText(announcement.submittedByName) || "there"},`,
+    "",
+    `Your Broadcast Desk announcement "${safeText(announcement.title)}" was marked ${status}.`,
+  ];
+  if (safeText(note)) {
+    lines.push("", `Note from the studio team: ${safeText(note)}`);
+  }
+  lines.push("", `Requested air date: ${dateRangeLabel(announcement)}`, "", "Broadcast Desk");
+  return lines.join("\n");
+}
+
+function announcementStatusEmailHtml(announcement, status, note) {
+  return `
+    <p>Hello ${escapeHtml(announcement.submittedByName) || "there"},</p>
+    <p>Your Broadcast Desk announcement <strong>${escapeHtml(announcement.title)}</strong> was marked <strong>${escapeHtml(status)}</strong>.</p>
+    ${
+      safeText(note)
+        ? `<p><strong>Note from the studio team:</strong><br>${escapeHtml(note).replaceAll("\n", "<br>")}</p>`
+        : ""
+    }
+    <p><strong>Requested air date:</strong> ${escapeHtml(dateRangeLabel(announcement))}</p>
+    <p>Broadcast Desk</p>
+  `.trim();
+}
+
+async function queueAnnouncementStatusEmail(announcement, status, note, profile) {
+  if (!ANNOUNCEMENT_EMAIL_STATUSES.includes(status)) return false;
+  const to = normalizeEmail(announcement.submittedByEmail);
+  if (!to || !isTeacherEmail(to)) return false;
+  await addDoc(collection(db, "mail"), {
+    to: [to],
+    announcementId: announcement.id,
+    status,
+    createdAt: serverTimestamp(),
+    createdBy: profile.uid,
+    createdByEmail: normalizeEmail(profile.email),
+    message: {
+      subject: announcementStatusEmailSubject(status, announcement),
+      text: announcementStatusEmailText(announcement, status, note),
+      html: announcementStatusEmailHtml(announcement, status, note),
+    },
+  });
+  return true;
 }
 
 function rundownItemFromAnnouncement(announcement, existingItem, order) {
@@ -316,7 +402,7 @@ function rundownItemFromAnnouncement(announcement, existingItem, order) {
     scriptText: buildAnnouncementScript(announcement),
     driveVideoLink: announcement.driveVideoLink || "",
     category: announcement.category,
-    section: existingItem?.section || sectionForAnnouncement(announcement),
+    section: normalizeRundownSection(existingItem?.section || sectionForAnnouncement(announcement)),
     order,
     status: "Approved",
     productionNotes: existingItem?.productionNotes || announcement.studioNotes || "",
@@ -390,11 +476,24 @@ async function removeAnnouncementFromRundowns(announcement, profile) {
 }
 
 function normalizeOrders(items) {
-  return items.map((item, index) => ({
-    ...item,
-    status: normalizeProductionStatus(item.status),
-    order: index + 1,
-  }));
+  return (items || [])
+    .map((item, index) => ({
+      ...item,
+      section: normalizeRundownSection(item.section),
+      status: normalizeProductionStatus(item.status),
+      order: Number(item.order) || index + 1,
+      originalIndex: index,
+    }))
+    .sort((a, b) => {
+      const sectionDiff = rundownSectionIndex(a.section) - rundownSectionIndex(b.section);
+      if (sectionDiff !== 0) return sectionDiff;
+      const orderDiff = a.order - b.order;
+      return orderDiff !== 0 ? orderDiff : a.originalIndex - b.originalIndex;
+    })
+    .map(({ originalIndex, ...item }, index) => ({
+      ...item,
+      order: index + 1,
+    }));
 }
 
 function normalizeChecklistItems(items) {
@@ -1230,10 +1329,14 @@ function TeacherStatus({ profile, taxonomy, setToast }) {
                         <${StatusBadge} status=${announcement.status} />
                       </div>
                       <p className="mt-4 line-clamp-4 text-sm leading-6 text-slate-300">${announcement.text}</p>
-                      ${announcement.studioNotes
+                      ${announcement.submitterNote &&
+                      ["Needs Revision", "Rejected"].includes(announcement.status)
                         ? html`
                             <div className="mt-4 rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm text-amber-100">
-                              ${announcement.studioNotes}
+                              <p className="mb-1 text-xs font-black uppercase tracking-[0.16em] text-amber-200">
+                                Note from studio
+                              </p>
+                              ${announcement.submitterNote}
                             </div>
                           `
                         : null}
@@ -1293,21 +1396,61 @@ function StudioDashboard({ profile, setToast }) {
     );
   });
 
-  const updateStatus = async (announcement, status) => {
+  const updateStatus = async (announcement, status, submitterNote = "") => {
+    const note = safeText(submitterNote);
+    if (["Needs Revision", "Rejected"].includes(status) && !note) {
+      setToast("Add a note for the submitter before changing that status.");
+      return false;
+    }
+
     try {
-      await updateDoc(doc(db, "announcements", announcement.id), {
+      const statusPayload = {
         status,
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (["Needs Revision", "Rejected"].includes(status)) {
+        Object.assign(statusPayload, {
+          submitterNote: note,
+          submitterNoteUpdatedAt: serverTimestamp(),
+          submitterNoteUpdatedBy: profile.uid,
+          submitterNoteUpdatedByEmail: normalizeEmail(profile.email),
+        });
+      } else if (status === "Approved") {
+        statusPayload.submitterNote = "";
+      }
+
+      await updateDoc(doc(db, "announcements", announcement.id), statusPayload);
+
       if (status === "Approved") {
         await syncApprovedAnnouncementToRundowns({ ...announcement, status }, profile);
-        setToast(`${announcement.title} approved and added to rundown`);
       } else {
         await removeAnnouncementFromRundowns(announcement, profile);
-        setToast(`${announcement.title} marked ${status}`);
       }
+
+      let emailMessage = "";
+      if (ANNOUNCEMENT_EMAIL_STATUSES.includes(status)) {
+        try {
+          const queued = await queueAnnouncementStatusEmail(
+            { ...announcement, status },
+            status,
+            note,
+            profile,
+          );
+          emailMessage = queued ? " Email queued." : " No teacher email was available to queue.";
+        } catch (emailError) {
+          emailMessage = ` Email was not queued: ${emailError.message}`;
+        }
+      }
+
+      const statusMessage =
+        status === "Approved"
+          ? `${announcement.title} approved and added to rundown.`
+          : `${announcement.title} marked ${status}.`;
+      setToast(`${statusMessage}${emailMessage}`);
+      return true;
     } catch (statusError) {
       setToast(statusError.message);
+      return false;
     }
   };
 
@@ -1513,11 +1656,39 @@ function ProductionNotes({ announcement, profile, setToast }) {
 }
 
 function AnnouncementActions({ announcement, updateStatus, setToast }) {
+  const [noteStatus, setNoteStatus] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteError, setNoteError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const openNotePrompt = (status) => {
+    setNoteStatus(status);
+    setNoteDraft("");
+    setNoteError("");
+  };
+
+  const submitStatusNote = async (event) => {
+    event.preventDefault();
+    const note = safeText(noteDraft);
+    if (!note) {
+      setNoteError("Add a short note so the teacher knows what to fix.");
+      return;
+    }
+    setBusy(true);
+    const saved = await updateStatus(announcement, noteStatus, note);
+    setBusy(false);
+    if (saved) {
+      setNoteStatus("");
+      setNoteDraft("");
+      setNoteError("");
+    }
+  };
+
   return html`
     <div className="flex flex-wrap gap-2">
       <${Button} icon=${Check} variant="success" onClick=${() => updateStatus(announcement, "Approved")}>Approve</${Button}>
-      <${Button} icon=${RefreshCcw} variant="warn" onClick=${() => updateStatus(announcement, "Needs Revision")}>Revise</${Button}>
-      <${Button} icon=${X} variant="danger" onClick=${() => updateStatus(announcement, "Rejected")}>Reject</${Button}>
+      <${Button} icon=${RefreshCcw} variant="warn" onClick=${() => openNotePrompt("Needs Revision")}>Revise</${Button}>
+      <${Button} icon=${X} variant="danger" onClick=${() => openNotePrompt("Rejected")}>Reject</${Button}>
       <${Button} icon=${Archive} variant="ghost" onClick=${() => updateStatus(announcement, "Archived")}>Archive</${Button}>
       ${announcement.driveVideoLink
         ? html`
@@ -1540,12 +1711,77 @@ function AnnouncementActions({ announcement, updateStatus, setToast }) {
         Copy script
       </${Button}>
     </div>
+
+    ${noteStatus
+      ? html`
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+            <form
+              onSubmit=${submitStatusNote}
+              className="glass-panel w-full max-w-lg rounded-2xl p-5 shadow-glow"
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-mint">
+                    Submitter note required
+                  </p>
+                  <h3 className="mt-1 text-xl font-black text-white">
+                    Mark as ${noteStatus}
+                  </h3>
+                </div>
+                <${Button}
+                  icon=${X}
+                  variant="ghost"
+                  disabled=${busy}
+                  onClick=${() => setNoteStatus("")}
+                >
+                  Close
+                </${Button}>
+              </div>
+              <p className="mb-3 text-sm leading-6 text-slate-400">
+                This note will be shown to ${announcement.submittedByName || "the submitter"} and included in the status email.
+              </p>
+              ${noteError
+                ? html`<p className="mb-3 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">${noteError}</p>`
+                : null}
+              <${Textarea}
+                value=${noteDraft}
+                disabled=${busy}
+                onInput=${(event) => setNoteDraft(event.currentTarget.value)}
+                placeholder="Explain what needs to change or why this cannot air."
+                className="min-h-36"
+                autoFocus=${true}
+              />
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <${Button}
+                  variant="ghost"
+                  disabled=${busy}
+                  onClick=${() => setNoteStatus("")}
+                >
+                  Cancel
+                </${Button}>
+                <${Button}
+                  icon=${noteStatus === "Rejected" ? X : RefreshCcw}
+                  variant=${noteStatus === "Rejected" ? "danger" : "warn"}
+                  type="submit"
+                  disabled=${busy || !safeText(noteDraft)}
+                >
+                  ${busy ? "Saving..." : `Send ${noteStatus}`}
+                </${Button}>
+              </div>
+            </form>
+          </div>
+        `
+      : null}
   `;
 }
 
 function RundownBuilder({ profile, setToast }) {
   const [date, setDate] = useState(todayISO());
-  const [custom, setCustom] = useState({ title: "", scriptText: "", section: "Main Announcements" });
+  const [custom, setCustom] = useState({
+    title: "",
+    scriptText: "",
+    section: RUNDOWN_SECTIONS[0],
+  });
   const [dragging, setDragging] = useState(null);
   const { rundown, loading, error } = useRundown(date);
   const locked = Boolean(rundown?.locked);
@@ -1586,14 +1822,14 @@ function RundownBuilder({ profile, setToast }) {
         scriptText: safeText(custom.scriptText),
         driveVideoLink: "",
         category: "Script",
-        section: custom.section,
+        section: normalizeRundownSection(custom.section),
         order: items.length + 1,
-        status: "Submitted",
+        status: "Approved",
         productionNotes: "",
       },
     ]);
-    setCustom({ title: "", scriptText: "", section: "Main Announcements" });
-    setToast("Script-only item added");
+    setCustom({ title: "", scriptText: "", section: RUNDOWN_SECTIONS[0] });
+    setToast("Script-only item added and approved");
   };
 
   const updateItem = async (itemId, patch) => {
@@ -1701,7 +1937,7 @@ function RundownBuilder({ profile, setToast }) {
           ${loading
             ? html`<${EmptyState} icon=${RefreshCcw} title="Loading rundown" />`
             : html`
-                <div className="grid gap-4 2xl:grid-cols-2">
+                <div className="grid gap-4">
                   ${RUNDOWN_SECTIONS.map((section) => {
                     const sectionItems = items.filter((item) => item.section === section);
                     return html`
@@ -1747,7 +1983,7 @@ function RundownBuilder({ profile, setToast }) {
               <${TextInput}
                 value=${custom.title}
                 onInput=${(event) => setCustom({ ...custom, title: event.currentTarget.value })}
-                placeholder="Anchor intro"
+                placeholder="Anchor name"
                 disabled=${locked}
               />
               <${Select}

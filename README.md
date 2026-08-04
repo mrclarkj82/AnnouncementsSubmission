@@ -32,6 +32,8 @@ Each daily rundown also includes a Studio Checklist stored on `rundowns/{date}.c
 
 When Studio marks an announcement `Approved`, it is automatically added to each matching daily rundown. There is no separate approval step.
 
+Broadcast Desk status changes to `Approved`, `Needs Revision`, or `Rejected` now create a locked-down `mail` queue document addressed to the announcement submitter. Actual email delivery requires Firebase's Trigger Email extension, or an equivalent Cloud Function, to be configured for the `mail` collection. `Needs Revision` and `Rejected` require a submitter-facing note before the status can be saved.
+
 Teachers only paste Google Drive links; the app does not upload video files.
 
 Video Production Studio is a separate direct-entry app at `video-production.html`. It is intentionally not linked from Broadcast Desk, and Broadcast Desk is not linked from Video Production Studio.
